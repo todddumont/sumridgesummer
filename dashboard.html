@@ -104,6 +104,7 @@
       background: var(--card);
       border: 1px solid var(--border);
       padding: 20px;
+      min-height: 105px;
     }
 
     .stat-label {
@@ -128,16 +129,22 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 18px;
       margin-bottom: 34px;
+      align-items: stretch;
     }
 
     .tool-card {
       background: var(--card);
       border: 1px solid var(--border);
       padding: 22px;
-      min-height: 210px;
+      min-height: 230px;
+      height: 100%;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+    }
+
+    .tool-card-content {
+      flex: 1;
     }
 
     .tool-number {
@@ -150,9 +157,10 @@
     }
 
     .tool-name {
-      font-size: 22px;
+      font-size: 21px;
       font-weight: 700;
       margin-bottom: 10px;
+      line-height: 1.2;
     }
 
     .tool-description {
@@ -173,6 +181,7 @@
       cursor: pointer;
       text-align: center;
       width: fit-content;
+      margin-top: 18px;
     }
 
     .tool-button:hover {
@@ -380,66 +389,68 @@
 
         <div class="tool-grid">
           <div class="tool-card">
-            <div>
+            <div class="tool-card-content">
               <div class="tool-number">Tool 1</div>
-              <div class="tool-name">Inventory Related News</div>
+              <div class="tool-name">What inventory has recent news with significance?</div>
               <div class="tool-description">
-                Identifies inventory bonds with significant and relevant news updates
+                Identifies inventory bonds with matching, significant, and relevant news updates.
               </div>
             </div>
             <button class="tool-button" onclick="openTool1()">Open Tool</button>
           </div>
 
           <div class="tool-card">
-            <div>
+            <div class="tool-card-content">
               <div class="tool-number">Tool 2</div>
+              <div class="tool-name">Personal Credit Analyst Team</div>
+              <div class="tool-description">
+                Given everything we know about our owned issuers, explains what a macro,
+                commodity, or industry event could mean for our bonds.
+              </div>
+            </div>
+            <button class="tool-button disabled">Open Tool</button>
+          </div>
+
+          <div class="tool-card">
+            <div class="tool-card-content">
+              <div class="tool-number">Tool 3</div>
               <div class="tool-name">Stale Inventory Engine</div>
               <div class="tool-description">
-                Tool2
+                Identifies paper that has been on sheet for an extended period of time
+                and highlights potential risks.
               </div>
             </div>
             <button class="tool-button disabled">Open Tool</button>
           </div>
 
           <div class="tool-card">
-            <div>
-              <div class="tool-number">Tool 3</div>
-              <div class="tool-name">Tool3</div>
-              <div class="tool-description">
-                Tool3
-              </div>
-            </div>
-            <button class="tool-button disabled">Open Tool</button>
-          </div>
-
-          <div class="tool-card">
-            <div>
+            <div class="tool-card-content">
               <div class="tool-number">Tool 4</div>
-              <div class="tool-name">Tool4</div>
+              <div class="tool-name">Tool 4</div>
               <div class="tool-description">
-                T4.
+                Placeholder for the fourth SumRidge AI Tool Shed capability.
               </div>
             </div>
             <button class="tool-button disabled">Open Tool</button>
           </div>
 
           <div class="tool-card">
-            <div>
+            <div class="tool-card-content">
               <div class="tool-number">Tool 5</div>
-              <div class="tool-name">T5</div>
+              <div class="tool-name">Tool 5</div>
               <div class="tool-description">
-                T5
+                Placeholder for the fifth SumRidge AI Tool Shed capability.
               </div>
             </div>
             <button class="tool-button disabled">Open Tool</button>
           </div>
 
           <div class="tool-card">
-            <div>
+            <div class="tool-card-content">
               <div class="tool-number">Tool 6</div>
-              <div class="tool-name">Tool6</div>
+              <div class="tool-name">Tool 6</div>
               <div class="tool-description">
-                Tool6
+                Placeholder for the sixth SumRidge AI Tool Shed capability.
               </div>
             </div>
             <button class="tool-button disabled">Open Tool</button>
