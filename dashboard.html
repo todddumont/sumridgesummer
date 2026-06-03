@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SumRidge AI Tool Shed</title>
+
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --sidebar: #0f172a;
+      --sidebar-light: #1e293b;
+      --card: #ffffff;
+      --text: #111827;
+      --muted: #6b7280;
+      --border: #d1d5db;
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --green: #16a34a;
+      --orange: #ea580c;
+      --red: #dc2626;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .app {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      width: 260px;
+      background: var(--sidebar);
+      color: white;
+      padding: 24px 18px;
+    }
+
+    .logo-wrap {
+      margin-bottom: 32px;
+    }
+
+    .logo {
+      width: 190px;
+      max-width: 100%;
+      display: block;
+    }
+
+    .sidebar-title {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #94a3b8;
+      margin-bottom: 12px;
+    }
+
+    .nav-item {
+      padding: 12px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: var(--sidebar-light);
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+
+    .main {
+      flex: 1;
+      padding: 34px;
+    }
+
+    .header {
+      margin-bottom: 26px;
+    }
+
+    .header h1 {
+      font-size: 34px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .header p {
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 850px;
+      line-height: 1.5;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      margin-bottom: 34px;
+    }
+
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 20px;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+
+    .stat-value {
+      font-size: 30px;
+      font-weight: 700;
+    }
+
+    .section-title {
+      font-size: 20px;
+      margin-bottom: 16px;
+      font-weight: 700;
+    }
+
+    .tool-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      margin-bottom: 34px;
+    }
+
+    .tool-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 22px;
+      min-height: 210px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .tool-number {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .tool-name {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .tool-description {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+      margin-bottom: 22px;
+    }
+
+    .tool-button {
+      display: inline-block;
+      text-decoration: none;
+      background: var(--accent);
+      color: white;
+      padding: 10px 14px;
+      font-size: 14px;
+      border: none;
+      cursor: pointer;
+      text-align: center;
+      width: fit-content;
+    }
+
+    .tool-button:hover {
+      background: var(--accent-dark);
+    }
+
+    @media (max-width: 1100px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .tool-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .app {
+        flex-direction: column;
+      }
+
+      .sidebar {
+        width: 100%;
+      }
+
+      .main {
+        padding: 22px;
+      }
+
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .tool-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo-wrap">
+        <img src="sumridgelogo1.png" alt="SumRidge Logo" class="logo" />
+      </div>
+
+      <div class="sidebar-title">AI Tool Shed</div>
+      <div class="nav-item">Tool Dashboard</div>
+      <div class="nav-item">Alerts</div>
+    </aside>
+
+    <main class="main">
+      <header class="header">
+        <h1>SumRidge AI Tool Shed</h1>
+        <p>
+          Internal dashboard for AI-assisted fixed income tools. Current tools are prototypes
+          and should be reviewed before use with clients.
+        </p>
+      </header>
+
+      <section class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Tools Working</div>
+          <div class="stat-value">0 / 6</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">APIs Connected</div>
+          <div class="stat-value">0</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">Reports Generated</div>
+          <div class="stat-value">0</div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="section-title">Tools</h2>
+
+        <div class="tool-grid">
+          <div class="tool-card">
+            <div>
+              <div class="tool-number">Tool 1</div>
+              <div class="tool-name">Inventory Intelligence</div>
+              <div class="tool-description">
+                Identifies inventory bonds with matching recent news, stale inventory,
+                and best opportunities today.
+              </div>
+            </div>
+            <button class="tool-button">Open Tool</button>
+          </div>
+
+          <div class="tool-card">
+            <div>
+              <div class="tool-number">Tool 2</div>
+              <div class="tool-name">Why Is This Bond Moving?</div>
+              <div class="tool-description">
+                Explains possible drivers behind bond movement using market data,
+                news, rates, spreads, and credit context.
+              </div>
+            </div>
+            <button class="tool-button">Open Tool</button>
+          </div>
+
+          <div class="tool-card">
+            <div>
+              <div class="tool-number">Tool 3</div>
+              <div class="tool-name">Stale Inventory Explainer</div>
+              <div class="tool-description">
+                Reviews stale inventory and highlights possible reasons bonds may
+                be sitting unsold.
+              </div>
+            </div>
+            <button class="tool-button">Open Tool</button>
+          </div>
+
+          <div class="tool-card">
+            <div>
+              <div class="tool-number">Tool 4</div>
+              <div class="tool-name">Bond Pitch Generator</div>
+              <div class="tool-description">
+                Creates internal bond talking points using approved bond data,
+                structure, pricing, and market context.
+              </div>
+            </div>
+            <button class="tool-button">Open Tool</button>
+          </div>
+
+          <div class="tool-card">
+            <div>
+              <div class="tool-number">Tool 5</div>
+              <div class="tool-name">Morning Brief Generator</div>
+              <div class="tool-description">
+                Generates a morning market brief from inventory, rates, news,
+                and internal priorities.
+              </div>
+            </div>
+            <button class="tool-button">Open Tool</button>
+          </div>
+
+          <div class="tool-card">
+            <div>
+              <div class="tool-number">Tool 6</div>
+              <div class="tool-name">Client Ready Daily Brief Alerts</div>
+              <div class="tool-description">
+                Surfaces client-ready alerts from inventory, recent news,
+                market movement, and internal focus areas.
+              </div>
+            </div>
+            <button class="tool-button">Open Tool</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
