@@ -179,6 +179,126 @@
       background: var(--accent-dark);
     }
 
+    .tool-button.disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.65);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .modal {
+      background: white;
+      width: min(1280px, 100%);
+      max-height: 88vh;
+      overflow: auto;
+      border: 1px solid var(--border);
+      padding: 24px;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .modal-title {
+      font-size: 26px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .modal-subtitle {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .close-button {
+      background: transparent;
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .run-area {
+      margin-bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .run-button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .run-button:hover {
+      background: var(--accent-dark);
+    }
+
+    .status-text {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .empty-state {
+      padding: 18px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 14px;
+      background: #f9fafb;
+    }
+
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 13px;
+    }
+
+    .results-table th,
+    .results-table td {
+      border: 1px solid var(--border);
+      padding: 9px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .results-table th {
+      background: #f9fafb;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .results-table a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .small-muted {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+
     @media (max-width: 1100px) {
       .stats-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -209,6 +329,10 @@
       .tool-grid {
         grid-template-columns: 1fr;
       }
+
+      .modal {
+        padding: 18px;
+      }
     }
   </style>
 </head>
@@ -222,7 +346,7 @@
 
       <div class="sidebar-title">AI Tool Shed</div>
       <div class="nav-item">Tool Dashboard</div>
-      <div class="nav-item">Alerts</div>
+      <div class="nav-item">Reports</div>
     </aside>
 
     <main class="main">
@@ -237,7 +361,7 @@
       <section class="stats-grid">
         <div class="stat-card">
           <div class="stat-label">Tools Working</div>
-          <div class="stat-value">0 / 6</div>
+          <div class="stat-value">1 / 6</div>
         </div>
 
         <div class="stat-card">
@@ -247,7 +371,7 @@
 
         <div class="stat-card">
           <div class="stat-label">Reports Generated</div>
-          <div class="stat-value">0</div>
+          <div class="stat-value" id="reportsGenerated">0</div>
         </div>
       </section>
 
@@ -258,77 +382,192 @@
           <div class="tool-card">
             <div>
               <div class="tool-number">Tool 1</div>
-              <div class="tool-name">Inventory Intelligence</div>
+              <div class="tool-name">Inventory Related News</div>
               <div class="tool-description">
-                Identifies inventory bonds with matching recent news, stale inventory,
-                and best opportunities today.
+                Identifies inventory bonds with significant and relevant news updates
               </div>
             </div>
-            <button class="tool-button">Open Tool</button>
+            <button class="tool-button" onclick="openTool1()">Open Tool</button>
           </div>
 
           <div class="tool-card">
             <div>
               <div class="tool-number">Tool 2</div>
-              <div class="tool-name">Why Is This Bond Moving?</div>
+              <div class="tool-name">Stale Inventory Engine</div>
               <div class="tool-description">
-                Explains possible drivers behind bond movement using market data,
-                news, rates, spreads, and credit context.
+                Tool2
               </div>
             </div>
-            <button class="tool-button">Open Tool</button>
+            <button class="tool-button disabled">Open Tool</button>
           </div>
 
           <div class="tool-card">
             <div>
               <div class="tool-number">Tool 3</div>
-              <div class="tool-name">Stale Inventory Explainer</div>
+              <div class="tool-name">Tool3</div>
               <div class="tool-description">
-                Reviews stale inventory and highlights possible reasons bonds may
-                be sitting unsold.
+                Tool3
               </div>
             </div>
-            <button class="tool-button">Open Tool</button>
+            <button class="tool-button disabled">Open Tool</button>
           </div>
 
           <div class="tool-card">
             <div>
               <div class="tool-number">Tool 4</div>
-              <div class="tool-name">Bond Pitch Generator</div>
+              <div class="tool-name">Tool4</div>
               <div class="tool-description">
-                Creates internal bond talking points using approved bond data,
-                structure, pricing, and market context.
+                T4.
               </div>
             </div>
-            <button class="tool-button">Open Tool</button>
+            <button class="tool-button disabled">Open Tool</button>
           </div>
 
           <div class="tool-card">
             <div>
               <div class="tool-number">Tool 5</div>
-              <div class="tool-name">Morning Brief Generator</div>
+              <div class="tool-name">T5</div>
               <div class="tool-description">
-                Generates a morning market brief from inventory, rates, news,
-                and internal priorities.
+                T5
               </div>
             </div>
-            <button class="tool-button">Open Tool</button>
+            <button class="tool-button disabled">Open Tool</button>
           </div>
 
           <div class="tool-card">
             <div>
               <div class="tool-number">Tool 6</div>
-              <div class="tool-name">Client Ready Daily Brief Alerts</div>
+              <div class="tool-name">Tool6</div>
               <div class="tool-description">
-                Surfaces client-ready alerts from inventory, recent news,
-                market movement, and internal focus areas.
+                Tool6
               </div>
             </div>
-            <button class="tool-button">Open Tool</button>
+            <button class="tool-button disabled">Open Tool</button>
           </div>
         </div>
       </section>
     </main>
   </div>
+
+  <div class="modal-overlay" id="tool1Modal">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Tool 1: Inventory Intelligence</div>
+          <div class="modal-subtitle">
+            Capability 1: Bonds With Recent News. This version groups inventory by issuer,
+            sector, and broader market bucket, then maps relevant news back to affected bonds.
+          </div>
+        </div>
+        <button class="close-button" onclick="closeTool1()">Close</button>
+      </div>
+
+      <div class="run-area">
+        <button class="run-button" onclick="runTool1()">Run Bonds With Recent News</button>
+        <span class="status-text" id="tool1Status">Ready.</span>
+      </div>
+
+      <div id="tool1Results">
+        <div class="empty-state">
+          Click “Run Bonds With Recent News” to run tool1.py and load the grouped output.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function openTool1() {
+      document.getElementById("tool1Modal").style.display = "flex";
+    }
+
+    function closeTool1() {
+      document.getElementById("tool1Modal").style.display = "none";
+    }
+
+    async function runTool1() {
+      const status = document.getElementById("tool1Status");
+      const results = document.getElementById("tool1Results");
+
+      status.textContent = "Running Python tool...";
+      results.innerHTML = '<div class="empty-state">Running. This may take a moment.</div>';
+
+      try {
+        const response = await fetch("/run-tool1", {
+          method: "POST"
+        });
+
+        const data = await response.json();
+
+        if (!data.success) {
+          status.textContent = "Error.";
+          results.innerHTML = `<div class="empty-state">${data.error}</div>`;
+          return;
+        }
+
+        status.textContent = `Done. ${data.rows.length} grouped row(s) returned.`;
+        document.getElementById("reportsGenerated").textContent = "1";
+
+        renderTool1Results(data.rows);
+      } catch (error) {
+        status.textContent = "Error.";
+        results.innerHTML = `<div class="empty-state">Could not connect to Python backend. Make sure app.py is running.</div>`;
+      }
+    }
+
+    function renderTool1Results(rows) {
+      const results = document.getElementById("tool1Results");
+
+      if (!rows || rows.length === 0) {
+        results.innerHTML = '<div class="empty-state">No results found.</div>';
+        return;
+      }
+
+      let html = `
+        <table class="results-table">
+          <thead>
+            <tr>
+              <th>Book</th>
+              <th>News Level</th>
+              <th>Issuer / Sector / Group</th>
+              <th>Affected Bonds</th>
+              <th>CUSIPs</th>
+              <th>Headline</th>
+              <th>Implication</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      rows.forEach(row => {
+        const url = row.url || "";
+        const headline = row.headline || "";
+        const headlineHtml = url
+          ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${headline}</a>`
+          : headline;
+
+        html += `
+          <tr>
+            <td>${row.book || ""}</td>
+            <td>${row.news_level || ""}</td>
+            <td>
+              ${row.issuer_sector_or_group || ""}
+              <div class="small-muted">${row.group_type || ""}</div>
+            </td>
+            <td>${row.affected_bond_count || ""}</td>
+            <td>${row.sample_cusips || ""}</td>
+            <td>${headlineHtml}</td>
+            <td>${row.implication || ""}</td>
+          </tr>
+        `;
+      });
+
+      html += `
+          </tbody>
+        </table>
+      `;
+
+      results.innerHTML = html;
+    }
+  </script>
 </body>
 </html>

@@ -1,0 +1,5 @@
+flask
+anthropic
+yfinance
+pandas
+numpy
