@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>H0A0 Relative Value Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand-mark">SR</div>
+        <div>
+          <div class="brand-name">SumRidge</div>
+          <div class="brand-subtitle">Relative Value</div>
+        </div>
+      </div>
+
+      <nav class="nav-list">
+        <button class="nav-item active" data-view="overview">Overview</button>
+        <button class="nav-item" data-view="bonds">Bond RV</button>
+        <button class="nav-item" data-view="issuers">Issuer RV</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="status-pill" id="loadStatus">Waiting for data</div>
+        <div class="small-note">H0A0 Historical Spread Relative Value</div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Standalone Analytics Engine</p>
+          <h1>H0A0 Relative Value Dashboard</h1>
+          <p class="subtitle">Rich/cheap rankings across bonds, issuers, peer groups, and issuer curves.</p>
+        </div>
+        <div class="topbar-actions">
+          <button class="ghost-button" id="reloadBtn">Reload CSVs</button>
+          <button class="primary-button" id="openUploadBtn">Load Files Manually</button>
+        </div>
+      </header>
+
+      <section class="upload-panel hidden" id="uploadPanel">
+        <div class="upload-grid">
+          <label>Bond RV CSV<input type="file" id="bondFile" accept=".csv" /></label>
+          <label>Issuer RV CSV<input type="file" id="issuerFile" accept=".csv" /></label>
+        </div>
+        <button class="primary-button" id="loadUploadBtn">Load Uploaded Files</button>
+        <p class="helper-text">Use this if the browser blocks local CSV fetches. Otherwise run <code>python -m http.server 8000</code> from the project folder and open this dashboard through localhost.</p>
+      </section>
+
+      <section class="metric-grid">
+        <article class="metric-card">
+          <span class="metric-label">Latest As-Of</span>
+          <strong id="metricAsOf">--</strong>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Bond Rows</span>
+          <strong id="metricBonds">--</strong>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Issuer Rows</span>
+          <strong id="metricIssuers">--</strong>
+        </article>
+      </section>
+
+      <section class="view-panel" id="overviewView">
+        <div class="section-heading">
+          <div>
+            <h2>Morning RV Snapshot</h2>
+            <p>Fast summary of the highest-priority rich/cheap signals.</p>
+          </div>
+        </div>
+        <div class="overview-grid">
+          <div class="panel-card">
+            <div class="panel-title">Top Cheap Bonds</div>
+            <div id="overviewCheap" class="mini-list"></div>
+          </div>
+          <div class="panel-card">
+            <div class="panel-title">Top Rich Bonds</div>
+            <div id="overviewRich" class="mini-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view-panel hidden" id="bondsView">
+        <div class="section-heading">
+          <div>
+            <h2>Bond Relative Value</h2>
+            <p>Bond-level scores using own history, issuer context, peer residuals, and issuer curve residuals.</p>
+          </div>
+          <div class="filters">
+            <input id="bondSearch" type="search" placeholder="Search ticker, description, sector..." />
+            <select id="bondSignalFilter">
+              <option value="">All signals</option>
+              <option value="Very Cheap">Very Cheap</option>
+              <option value="Cheap">Cheap</option>
+              <option value="Neutral">Neutral</option>
+              <option value="Rich">Rich</option>
+              <option value="Very Rich">Very Rich</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap"><table id="bondTable"></table></div>
+      </section>
+
+      <section class="view-panel hidden" id="issuersView">
+        <div class="section-heading">
+          <div>
+            <h2>Issuer Relative Value</h2>
+            <p>Company-level rich/cheap view adjusted for issuer history and rating/sector peer context, with the specific bond CUSIPs behind each issuer signal.</p>
+          </div>
+          <div class="filters">
+            <input id="issuerSearch" type="search" placeholder="Search issuer or sector..." />
+          </div>
+        </div>
+        <div class="table-wrap"><table id="issuerTable"></table></div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
