@@ -2,15 +2,19 @@
 """
 H0A0 Historical Relative Value Engine v2.0
 
+
 Standalone analytics script for ICE/BAML H0A0 historical constituent files.
+
 
 Purpose:
     Identify rich/cheap bonds and issuers using historical OAS, peer residuals,
     historical peer-adjusted residuals, Level-4 cohort valuation context,
     current shrunk peer residuals, issuer context, and own-OAS history.
 
+
 Default data path:
     P:\\jmorris\\ICE H0A0 Historical Index Data
+
 
 Outputs:
     output/bond_rv_latest.csv
@@ -21,13 +25,16 @@ Outputs:
     output/data_quality_report.txt
     output/h0a0_relative_value_report.xlsx
 
+
 Notes:
     - Does not upload or move raw ICE/BAML data.
     - Uses pandas/numpy/openpyxl only.
     - Saves a normalized-history cache after parsing so future runs are faster.
 """
 
+
 from __future__ import annotations
+
 
 import argparse
 import csv
@@ -42,9 +49,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+
 import numpy as np
 import pandas as pd
 pd.set_option("future.no_silent_downcasting", True)
+
 
 DEFAULT_HISTORY_DIR = r"P:\jmorris\ICE H0A0 Historical Index Data"
 DEFAULT_OUTPUT_DIR = "output"
@@ -53,7 +62,9 @@ CACHE_FILE_NAME = "h0a0_normalized_history.pkl"
 MANIFEST_FILE_NAME = "h0a0_cache_manifest.json"
 DEFAULT_HISTORY_LOOKBACK_MONTHS = 12
 
+
 SUPPORTED_EXTENSIONS = {".csv", ".txt", ".xlsx", ".xls", ".xlsm"}
+
 
 # Canonical field aliases. The ICE/BAML file uses long names and occasional spacing variations.
 COLUMN_ALIASES: Dict[str, List[str]] = {
@@ -93,11 +104,58 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
     "excess_return_1m": ["Excess Rtn % 1-month", "Excess Return % 1-month"],
 }
 
-MODEL_VERSION = "v2.0 Internal-OAS Weighted RV Score + Level-4 Cohort Context"
+
+MODEL_VERSION = "v2.1 Full-Rating Scored Universe + Internal-OAS Weighted RV Score"
 CORE_RATINGS_EXACT = {"BB1", "BB2", "BB3", "B1", "B2", "B3"}
 CORE_RATING_BUCKETS = {"B", "BB"}
+
+# v2.1: the scored universe is no longer restricted to BB1-B3. Crossover/split-rated
+# entrants (BBB notches) and performing CCC credits are scored and written to the core
+# output. Peer groups and cohorts are keyed on rating_bucket, so these names form their
+# own comparison sets rather than contaminating BB/B medians.
+SCORED_RATINGS_EXACT = {
+    "BBB1", "BBB2", "BBB3",
+    "BB1", "BB2", "BB3",
+    "B1", "B2", "B3",
+    "CCC1", "CCC2", "CCC3",
+}
+SCORED_RATING_BUCKETS = {"BBB", "BB", "B", "CCC_OR_BELOW"}
+
+# Ratings that are never scored: actual/near default.
+NEVER_SCORED_RATINGS = {"D", "C", "CC"}
+
+# Universe mode. "all_rated" (default) scores every performing rated bond.
+# "bb_b_only" restores the pre-v2.1 BB1-B3 behaviour.
+CORE_UNIVERSE_MODE = "all_rated"
+
+# Hard tradability gates for the scored universe under "all_rated".
+# These exist to drop recovery-value/broken rows, not to enforce a rating band.
+ALL_RATED_MIN_PRICE = 50.0
+ALL_RATED_MAX_OAS = 2000.0
+
+# Labelling thresholds. These tag a bond as stressed in the output; they no longer
+# remove it from the scored book under "all_rated".
+STRESS_LABEL_PRICE = 80.0
+STRESS_LABEL_OAS = 800.0
+
+
+def scored_ratings_exact() -> set:
+    return CORE_RATINGS_EXACT if CORE_UNIVERSE_MODE == "bb_b_only" else SCORED_RATINGS_EXACT
+
+
+def scored_rating_buckets() -> set:
+    return CORE_RATING_BUCKETS if CORE_UNIVERSE_MODE == "bb_b_only" else SCORED_RATING_BUCKETS
+
+
+def universe_min_price() -> float:
+    return 80.0 if CORE_UNIVERSE_MODE == "bb_b_only" else ALL_RATED_MIN_PRICE
+
+
+def universe_max_oas() -> float:
+    return 800.0 if CORE_UNIVERSE_MODE == "bb_b_only" else ALL_RATED_MAX_OAS
 TARGET_SECTOR_GROUPS = {"Retail", "Healthcare"}
 TARGET_SECTOR_LABEL = "Full HY"
+
 
 NUMERIC_COLUMNS = [
     "price",
@@ -123,6 +181,7 @@ NUMERIC_COLUMNS = [
     "excess_return_1m",
 ]
 
+
 OUTPUT_BOND_COLUMNS = [
     "as_of_date",
     "ticker",
@@ -134,8 +193,10 @@ OUTPUT_BOND_COLUMNS = [
     "coupon",
     "maturity_date",
     "rating",
+    "rating_raw",
     "rating_bucket",
     "core_universe_status",
+    "stress_label",
     "sector_l3",
     "sector_l4",
     "target_sector_group",
@@ -214,6 +275,7 @@ OUTPUT_BOND_COLUMNS = [
     "rv_note",
 ]
 
+
 ISSUER_OUTPUT_COLUMNS = [
     "as_of_date",
     "ticker",
@@ -253,15 +315,21 @@ ISSUER_OUTPUT_COLUMNS = [
 ]
 
 
+
+
 def log(message: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     print(f"[{now}] {message}", flush=True)
+
+
 
 
 def clean_col_name(value: object) -> str:
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value).strip())
+
+
 
 
 def parse_date_from_filename(path: Path) -> Optional[pd.Timestamp]:
@@ -274,16 +342,22 @@ def parse_date_from_filename(path: Path) -> Optional[pd.Timestamp]:
         return None
 
 
+
+
 def find_header_row_csv(path: Path, max_rows: int = 20) -> int:
     with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         reader = csv.reader(handle)
 
+
         for idx, row in enumerate(reader):
+
 
             if idx >= max_rows:
                 break
 
+
             normalized = [clean_col_name(x).lower() for x in row]
+
 
             # Look for the real ICE table header instead of exact names.
             has_cusip = any("cusip" in c for c in normalized)
@@ -291,12 +365,16 @@ def find_header_row_csv(path: Path, max_rows: int = 20) -> int:
             has_desc = any("description" in c for c in normalized)
             has_coupon = any("coupon" in c for c in normalized)
 
+
             # A real ICE header will always have CUSIP plus either
             # ticker/description and the coupon column.
             if has_cusip and has_coupon and (has_ticker or has_desc):
                 return idx
 
+
     return 0
+
+
 
 
 def read_raw_file(path: Path) -> pd.DataFrame:
@@ -317,6 +395,8 @@ def read_raw_file(path: Path) -> pd.DataFrame:
     raise ValueError(f"Unsupported file extension: {path.suffix}")
 
 
+
+
 def pick_column(raw_columns: Sequence[str], aliases: Sequence[str]) -> Optional[str]:
     clean_to_raw = {clean_col_name(col).lower(): col for col in raw_columns}
     for alias in aliases:
@@ -326,10 +406,13 @@ def pick_column(raw_columns: Sequence[str], aliases: Sequence[str]) -> Optional[
     return None
 
 
+
+
 def normalize_one_file(path: Path) -> Tuple[pd.DataFrame, Dict[str, object]]:
     as_of_date = parse_date_from_filename(path)
     raw = read_raw_file(path)
     raw.columns = [clean_col_name(c) for c in raw.columns]
+
 
     data: Dict[str, pd.Series] = {}
     for canonical, aliases in COLUMN_ALIASES.items():
@@ -339,9 +422,11 @@ def normalize_one_file(path: Path) -> Tuple[pd.DataFrame, Dict[str, object]]:
         else:
             data[canonical] = raw[raw_col]
 
+
     df = pd.DataFrame(data)
     df.insert(0, "as_of_date", as_of_date)
     df.insert(1, "source_file", path.name)
+
 
     for col in NUMERIC_COLUMNS:
         if col in df.columns:
@@ -354,17 +439,21 @@ def normalize_one_file(path: Path) -> Tuple[pd.DataFrame, Dict[str, object]]:
             )
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+
     for col in ["ticker", "rating", "sector_l2", "sector_l3", "sector_l4", "isin", "cusip", "description"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip().replace({"": np.nan, "nan": np.nan, "None": np.nan})
 
+
     if "maturity_date" in df.columns:
         df["maturity_date"] = pd.to_datetime(df["maturity_date"], errors="coerce")
+
 
     # Remove rows with no usable security identity and no market data.
     identity_present = df[["isin", "cusip", "ticker", "description"]].notna().any(axis=1)
     market_present = df[["price", "oas", "ytw"]].notna().any(axis=1)
     df = df.loc[identity_present & market_present].copy()
+
 
     info = {
         "file": path.name,
@@ -372,6 +461,8 @@ def normalize_one_file(path: Path) -> Tuple[pd.DataFrame, Dict[str, object]]:
         "rows": int(len(df)),
     }
     return df, info
+
+
 
 
 def list_history_files(history_dir: Path) -> List[Path]:
@@ -390,6 +481,9 @@ def list_history_files(history_dir: Path) -> List[Path]:
 
 
 
+
+
+
 def filter_history_files_to_lookback(
     files: Sequence[Path],
     requested_as_of_date: Optional[str] = None,
@@ -397,10 +491,12 @@ def filter_history_files_to_lookback(
 ) -> Tuple[List[Path], Optional[pd.Timestamp], Optional[pd.Timestamp]]:
     """Return only ICE history files inside the requested lookback window.
 
+
     The RV model uses only the last 12 months of ICE files by default.
     The anchor date is the requested as-of date when supplied; otherwise it is
     the latest date found in the ICE filenames. Files outside the window are not
     parsed, cached, or used in score percentiles/residual histories.
+
 
     Set --history-lookback-months 0 to deliberately use all files.
     """
@@ -408,6 +504,7 @@ def filter_history_files_to_lookback(
     if history_lookback_months is None or int(history_lookback_months) <= 0:
         log(f"History lookback disabled: using all {len(all_files):,} supported file(s).")
         return all_files, None, None
+
 
     dated: List[Tuple[pd.Timestamp, Path]] = []
     undated: List[Path] = []
@@ -418,24 +515,29 @@ def filter_history_files_to_lookback(
         else:
             dated.append((pd.Timestamp(dt), path))
 
+
     if not dated:
         log("WARNING: no parseable dates found in ICE filenames; using all supported history files.")
         return all_files, None, None
+
 
     if requested_as_of_date:
         anchor_date = pd.Timestamp(pd.to_datetime(requested_as_of_date)).normalize()
     else:
         anchor_date = max(dt for dt, _ in dated).normalize()
 
+
     cutoff_date = (anchor_date - pd.DateOffset(months=int(history_lookback_months))).normalize()
     filtered = [path for dt, path in dated if cutoff_date <= dt.normalize() <= anchor_date]
     filtered.sort(key=lambda p: (parse_date_from_filename(p) or pd.Timestamp.min, p.name))
+
 
     if not filtered:
         raise FileNotFoundError(
             f"No ICE history files found from {cutoff_date.date()} through {anchor_date.date()} "
             f"in the {history_lookback_months}-month lookback window."
         )
+
 
     log(
         f"History lookback: using {len(filtered):,} dated ICE file(s) from "
@@ -445,6 +547,7 @@ def filter_history_files_to_lookback(
     if undated:
         log(f"History lookback: ignored {len(undated):,} undated supported file(s).")
     return filtered, anchor_date, cutoff_date
+
 
 def build_manifest(
     files: Sequence[Path],
@@ -464,8 +567,12 @@ def build_manifest(
     }
 
 
+
+
 def manifest_matches(existing: Dict[str, object], current: Dict[str, object]) -> bool:
     return existing == current
+
+
 
 
 def load_or_parse_history(
@@ -486,8 +593,10 @@ def load_or_parse_history(
         files = files[-max_files:]
         log(f"Test mode: using latest {len(files)} file(s).")
 
+
     if not files:
         raise FileNotFoundError(f"No supported history files found in {history_dir}")
+
 
     cache_dir = output_dir / CACHE_DIR_NAME
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -499,6 +608,7 @@ def load_or_parse_history(
         anchor_date=anchor_date,
         cutoff_date=cutoff_date,
     )
+
 
     if not rebuild_cache and max_files is None and cache_file.exists() and manifest_file.exists():
         try:
@@ -512,10 +622,12 @@ def load_or_parse_history(
         except Exception as exc:
             log(f"Cache load skipped: {exc}")
 
+
     log(f"Parsing {len(files):,} historical file(s) from: {history_dir}")
     frames: List[pd.DataFrame] = []
     parse_report: List[Dict[str, object]] = []
     start = time.time()
+
 
     for idx, path in enumerate(files, start=1):
         try:
@@ -527,28 +639,37 @@ def load_or_parse_history(
             log(f"WARNING: failed to parse {path.name}: {exc}")
             continue
 
+
         if idx == 1 or idx % 25 == 0 or idx == len(files):
             latest_date = max([r.get("date") for r in parse_report if r.get("date")], default="unknown")
             log(f"Parsed {idx:,}/{len(files):,} files; latest file date parsed {latest_date} ({path.name})")
 
+
     if not frames:
         raise RuntimeError("No files parsed successfully.")
+
 
     history = pd.concat(frames, ignore_index=True)
     history = finalize_history(history)
     log(f"Normalized history has {len(history):,} row(s). Parse time: {(time.time() - start) / 60:.1f} minutes.")
+
 
     if max_files is None:
         log(f"Saving normalized history cache: {cache_file}")
         history.to_pickle(cache_file)
         manifest_file.write_text(json.dumps(current_manifest, indent=2), encoding="utf-8")
 
+
     return history, parse_report, False
+
+
+
 
 
 
 def target_sector_group(df: pd.DataFrame) -> pd.Series:
     """Classify the project target sector group.
+
 
     This helper keeps a lightweight Core/Other sector grouping,
     but v1.6 is a full high-yield split monitor. Classification is driven by ICE/BAML
@@ -561,18 +682,23 @@ def target_sector_group(df: pd.DataFrame) -> pd.Series:
     sector_text = sector_l2 + " " + sector_l3 + " " + sector_l4
     desc = df.get("description", pd.Series("", index=df.index)).fillna("").astype(str).str.upper()
 
+
     retail_mask = sector_text.str.contains(r"\bRETAIL\b", regex=True, na=False)
     healthcare_mask = sector_text.str.contains(r"HEALTH\s*CARE|HEALTHCARE|\bHEALTH\b", regex=True, na=False)
+
 
     unknown_sector = sector_text.str.contains(r"UNKNOWN|NAN|NONE", regex=True, na=False) | sector_text.str.strip().eq("")
     # Very limited fallback for rows where sector fields are unavailable.
     retail_mask = retail_mask | (unknown_sector & desc.str.contains(r"\bRETAIL\b", regex=True, na=False))
     healthcare_mask = healthcare_mask | (unknown_sector & desc.str.contains(r"HEALTH\s*CARE|HEALTHCARE|HOSPITAL|MEDICAL", regex=True, na=False))
 
+
     out = pd.Series("Other", index=df.index, dtype=object)
     out = out.mask(retail_mask, "Retail")
     out = out.mask(healthcare_mask, "Healthcare")
     return out
+
+
 
 
 def is_target_sector(df: pd.DataFrame) -> pd.Series:
@@ -582,8 +708,11 @@ def is_target_sector(df: pd.DataFrame) -> pd.Series:
     return group.astype(str).isin(TARGET_SECTOR_GROUPS)
 
 
+
+
 def apply_current_model_rules(df: pd.DataFrame) -> pd.DataFrame:
     """Reapply v1.6 universe rules to cached normalized history.
+
 
     Existing caches may have been created by earlier model versions. This migration
     keeps the cache useful while ensuring the current full high-yield split monitor
@@ -595,7 +724,9 @@ def apply_current_model_rules(df: pd.DataFrame) -> pd.DataFrame:
     if "ticker" in df.columns:
         df["ticker"] = df["ticker"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
     if "rating" in df.columns:
-        df["rating"] = df["rating"].fillna("NR").astype(str).str.upper().str.strip()
+        if "rating_raw" not in df.columns:
+            df["rating_raw"] = df["rating"].fillna("NR").astype(str).str.upper().str.strip()
+        df["rating"] = normalize_rating_notation(df["rating_raw"])
     if "sector_l2" in df.columns:
         df["sector_l2"] = df["sector_l2"].fillna("UNKNOWN").astype(str).str.strip()
     if "sector_l3" in df.columns:
@@ -617,6 +748,7 @@ def apply_current_model_rules(df: pd.DataFrame) -> pd.DataFrame:
     df["target_sector_group"] = target_sector_group(df)
     df["lender_stress_status"] = lender_stress_status(df)
     df["core_universe_status"] = core_universe_status(df)
+    df["stress_label"] = stress_label(df)
     df["normal_rv_eligible"] = normal_rv_eligible(df)
     df["distressed_event"] = ~df["normal_rv_eligible"]
     df["flags"] = build_flags(df)
@@ -626,16 +758,20 @@ def apply_current_model_rules(df: pd.DataFrame) -> pd.DataFrame:
         df.loc[df["rv_weight"].isna() | (df["rv_weight"] <= 0), "rv_weight"] = 1.0
     return df
 
+
 def finalize_history(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["as_of_date"] = pd.to_datetime(df["as_of_date"], errors="coerce")
     df = df.loc[df["as_of_date"].notna()].copy()
 
+
     df["ticker"] = df["ticker"].fillna("UNKNOWN").astype(str).str.upper().str.strip()
-    df["rating"] = df["rating"].fillna("NR").astype(str).str.upper().str.strip()
+    df["rating_raw"] = df["rating"].fillna("NR").astype(str).str.upper().str.strip()
+    df["rating"] = normalize_rating_notation(df["rating"])
     df["sector_l2"] = df["sector_l2"].fillna("UNKNOWN").astype(str).str.strip()
     df["sector_l3"] = df["sector_l3"].fillna(df["sector_l2"]).fillna("UNKNOWN").astype(str).str.strip()
     df["sector_l4"] = df["sector_l4"].fillna(df["sector_l3"]).fillna("UNKNOWN").astype(str).str.strip()
+
 
     df["bond_key"] = df["isin"].where(df["isin"].notna(), df["cusip"])
     missing_key = df["bond_key"].isna()
@@ -647,6 +783,7 @@ def finalize_history(df: pd.DataFrame) -> pd.DataFrame:
         + df.loc[missing_key, "maturity_date"].astype(str)
     )
 
+
     df["rating_bucket"] = df["rating"].map(rating_bucket).fillna("OTHER")
     df["rating_score"] = df["rating"].map(rating_score)
     df["maturity_bucket"] = pd.cut(
@@ -654,6 +791,7 @@ def finalize_history(df: pd.DataFrame) -> pd.DataFrame:
         bins=[-np.inf, 2, 4, 6, 8, 10, np.inf],
         labels=["0-2", "2-4", "4-6", "6-8", "8-10", "10+"],
     ).astype(str).replace("nan", "UNKNOWN")
+
 
     # Best-effort structure bucket used only for issuer-curve fitting.
     # ICE/H0A0 files do not always provide clean seniority/collateral fields, so this
@@ -664,10 +802,13 @@ def finalize_history(df: pd.DataFrame) -> pd.DataFrame:
     df["target_sector_group"] = target_sector_group(df)
     df["lender_stress_status"] = lender_stress_status(df)
 
+
     df["core_universe_status"] = core_universe_status(df)
+    df["stress_label"] = stress_label(df)
     df["normal_rv_eligible"] = normal_rv_eligible(df)
     df["distressed_event"] = ~df["normal_rv_eligible"]
     df["flags"] = build_flags(df)
+
 
     # Use index_weight if available, otherwise market value, otherwise equal weight.
     df["rv_weight"] = df["index_weight"].copy()
@@ -676,11 +817,19 @@ def finalize_history(df: pd.DataFrame) -> pd.DataFrame:
     ]
     df.loc[df["rv_weight"].isna() | (df["rv_weight"] <= 0), "rv_weight"] = 1.0
 
+
     return df.reset_index(drop=True)
+
+
 
 
 def rating_bucket(rating: object) -> str:
     r = str(rating).upper().strip()
+    # BBB must be tested before BB, otherwise crossover names collapse into the BB bucket.
+    if r.startswith("BBB"):
+        return "BBB"
+    if r.startswith("AAA") or r.startswith("AA") or re.fullmatch(r"A[123+-]?", r):
+        return "IG_ABOVE_BBB"
     if r.startswith("BB"):
         return "BB"
     if re.fullmatch(r"B[123+-]?", r) or r.startswith("B") and not r.startswith("BB"):
@@ -692,8 +841,13 @@ def rating_bucket(rating: object) -> str:
     return "OTHER"
 
 
+
+
 def rating_score(rating: object) -> float:
     order = {
+        "BBB1": -2,
+        "BBB2": -1,
+        "BBB3": 0,
         "BB1": 1,
         "BB2": 2,
         "BB3": 3,
@@ -710,9 +864,46 @@ def rating_score(rating: object) -> float:
     return float(order.get(str(rating).upper().strip(), np.nan))
 
 
+_RATING_NOTATION_MAP = {
+    # Moody's notation -> ICE composite notation
+    "BA1": "BB1", "BA2": "BB2", "BA3": "BB3",
+    "CAA1": "CCC1", "CAA2": "CCC2", "CAA3": "CCC3",
+    "CA": "CC",
+    # S&P / Fitch sign notation -> ICE composite notation
+    "BAA1": "BBB1", "BAA2": "BBB2", "BAA3": "BBB3",
+    "BBB+": "BBB1", "BBB": "BBB2", "BBB-": "BBB3",
+    "BB+": "BB1", "BB": "BB2", "BB-": "BB3",
+    "B+": "B1", "B": "B2", "B-": "B3",
+    "CCC+": "CCC1", "CCC": "CCC2", "CCC-": "CCC3",
+}
+
+
+def normalize_rating_notation(rating: pd.Series) -> pd.Series:
+    """Normalize rating strings to ICE composite notation (BB1..B3, CCC1..).
+
+    ICE composite ratings are already BB1/BB2/... style, but new index entrants
+    (fallen angels) and some export variants can arrive as agency notation
+    ("BB+", "Ba1"), or carry watch/outlook markers ("BB1 *-", "B1u"). Without
+    normalization those rows silently fail the exact CORE_RATINGS_EXACT match
+    and drop out of the Core B/BB output even though they belong there.
+    """
+    r = rating.fillna("NR").astype(str).str.upper().str.strip()
+    # Strip watch/outlook decorations: "*", "*+", "*-", "(P)", trailing "U"/"E",
+    # and internal whitespace. Keep only rating-relevant characters first.
+    r = r.str.replace(r"\s*\*[+-]?", "", regex=True)
+    r = r.str.replace(r"\(P\)", "", regex=True)
+    r = r.str.replace(r"\s+", "", regex=True)
+    r = r.str.replace(r"(?<=[0-9+\-])[UE]$", "", regex=True)
+    return r.map(lambda v: _RATING_NOTATION_MAP.get(v, v))
+
+
+
+
+
 
 def lender_finance_mask(df: pd.DataFrame) -> pd.Series:
     """Identify lending / specialty-finance credits for a tighter core filter.
+
 
     These issuers can create exaggerated B/BB RV results when they are already in a
     stressed funding environment. The purpose is not to remove all financials from
@@ -726,6 +917,7 @@ def lender_finance_mask(df: pd.DataFrame) -> pd.Series:
     typ = df.get("type", pd.Series("", index=df.index)).fillna("").astype(str).str.upper()
     text = sector_l2 + " " + sector_l3 + " " + sector_l4 + " " + desc + " " + typ
 
+
     lender_terms = (
         r"FINANCIAL\s+SERVICES|CONSUMER\s+FINANCE|SPECIALTY\s+FINANCE|MORTGAGE|"
         r"LEND(?:ER|ING)?|LOAN|CREDIT|BANK|BROKER|CAPITAL\s+CORP|FUNDING|"
@@ -735,8 +927,11 @@ def lender_finance_mask(df: pd.DataFrame) -> pd.Series:
     return text.str.contains(lender_terms, regex=True, na=False)
 
 
+
+
 def lender_stress_status(df: pd.DataFrame) -> pd.Series:
     """Classify lenders separately from the normal B/BB performing universe.
+
 
     Performing lenders can remain in Core B/BB. Stressed or distressed lenders are
     moved to the review page because their spread cheapness is often a funding,
@@ -750,10 +945,13 @@ def lender_stress_status(df: pd.DataFrame) -> pd.Series:
     price = pd.to_numeric(df.get("price", pd.Series(np.nan, index=df.index)), errors="coerce")
     ytw = pd.to_numeric(df.get("ytw", pd.Series(np.nan, index=df.index)), errors="coerce")
 
+
     out = pd.Series("Non-Lender", index=df.index, dtype=object)
     out = out.mask(is_lender, "Lender Performing")
 
-    core_lender = is_lender & rating.isin(CORE_RATINGS_EXACT) & rating_bucket_col.isin(CORE_RATING_BUCKETS)
+
+    core_lender = is_lender & rating.isin(scored_ratings_exact()) & rating_bucket_col.isin(scored_rating_buckets())
+
 
     stressed = core_lender & (
         oas.ge(525)
@@ -768,17 +966,21 @@ def lender_stress_status(df: pd.DataFrame) -> pd.Series:
         | (rating.eq("B3") & oas.ge(575))
     )
 
+
     out = out.mask(stressed, "Stressed Lender Watch")
     out = out.mask(distressed, "Distressed Lender Review")
     return out
 
+
 def core_universe_status(df: pd.DataFrame) -> pd.Series:
     """Classify bonds before RV scoring.
+
 
     v1.6 is a full high-yield split monitor with two separate analytical views:
       1. Core B/BB Performing RV: BB1-B3 bonds that are not stressed/distressed.
       2. HY / Distressed Review: CCC-and-below, stressed B/BB, insufficient-data,
          cash, and other non-core or distressed/event bonds.
+
 
     The main RV score is meant for the Core B/BB universe. The review universe is
     intentionally displayed on a different dashboard page with different columns and
@@ -792,32 +994,75 @@ def core_universe_status(df: pd.DataFrame) -> pd.Series:
     ytw = df.get("ytw", pd.Series(np.nan, index=df.index))
     years = df.get("years_to_worst", pd.Series(np.nan, index=df.index))
 
+
     status = pd.Series("Core B/BB", index=df.index, dtype=object)
+    exact_core = rating.isin(scored_ratings_exact()) & rating_bucket_col.isin(scored_rating_buckets())
+    min_price = universe_min_price()
+    max_oas = universe_max_oas()
+
 
     # Non-tradable / insufficient rows.
     status = status.mask((sector_l2 == "CASH") | (rating == "CASH"), "Cash/Excluded")
     status = status.mask(price.isna() | oas.isna(), "Insufficient Data")
 
-    # Explicit distress/default-like ratings and extreme market levels.
-    status = status.mask(rating.isin(["D", "C", "CC"]), "Distressed/Event")
-    status = status.mask(rating_bucket_col.eq("CCC_OR_BELOW"), "CCC / Distressed Review")
-    status = status.mask((price < 70) | (oas >= 1000) | (ytw.fillna(0) >= 50) | (years.fillna(0) < 0.25), "Distressed/Event")
 
-    # Stressed B/BB goes to the review page, not the normal RV page.
-    exact_core = rating.isin(CORE_RATINGS_EXACT) & rating_bucket_col.isin(CORE_RATING_BUCKETS)
+    # Actual or near-default ratings are never scored.
+    status = status.mask(rating.isin(NEVER_SCORED_RATINGS), "Distressed/Event")
+
+
+    if CORE_UNIVERSE_MODE == "bb_b_only":
+        status = status.mask(rating_bucket_col.eq("CCC_OR_BELOW"), "CCC / Distressed Review")
+        status = status.mask((price < 70) | (oas >= 1000) | (ytw.fillna(0) >= 50) | (years.fillna(0) < 0.25), "Distressed/Event")
+    else:
+        # v2.1: only genuinely broken / recovery-value rows leave the scored book.
+        # A CCC or crossover bond that still trades on spread stays in and is scored
+        # against its own rating cohort.
+        status = status.mask(
+            (price < min_price) | (oas >= max_oas) | (ytw.fillna(0) >= 50) | (years.fillna(0) < 0.25),
+            "Distressed/Event",
+        )
+
 
     lender_status = df.get("lender_stress_status")
     if lender_status is None:
         lender_status = lender_stress_status(df)
     lender_status = lender_status.astype(str)
-    status = status.mask((status == "Core B/BB") & exact_core & lender_status.eq("Stressed Lender Watch"), "Stressed Lender Watch")
-    status = status.mask((status == "Core B/BB") & exact_core & lender_status.eq("Distressed Lender Review"), "Distressed Lender Review")
 
-    status = status.mask((status == "Core B/BB") & exact_core & ((price < 80) | (oas >= 800)), "Stressed Watch")
 
-    # Anything not exact B/BB and not already categorized becomes other HY/review.
+    if CORE_UNIVERSE_MODE == "bb_b_only":
+        status = status.mask((status == "Core B/BB") & exact_core & lender_status.eq("Stressed Lender Watch"), "Stressed Lender Watch")
+        status = status.mask((status == "Core B/BB") & exact_core & lender_status.eq("Distressed Lender Review"), "Distressed Lender Review")
+        status = status.mask((status == "Core B/BB") & exact_core & ((price < STRESS_LABEL_PRICE) | (oas >= STRESS_LABEL_OAS)), "Stressed Watch")
+    else:
+        # Distressed lenders still route out; stressed lenders and stressed levels are
+        # now labelled on the row (stress_label / flags) instead of dropping the bond.
+        status = status.mask((status == "Core B/BB") & lender_status.eq("Distressed Lender Review"), "Distressed Lender Review")
+
+
+    # Anything left without a scoreable rating notch goes to the review book.
     status = status.mask((status == "Core B/BB") & (~exact_core), "Other HY Review")
     return status
+
+
+def stress_label(df: pd.DataFrame) -> pd.Series:
+    """Non-excluding stress tag carried on scored rows.
+
+    Under the v2.1 all-rated universe a wide or low-dollar-price bond is still scored,
+    so the stress information moves from a filter into a column the dashboard can show.
+    """
+    price = pd.to_numeric(df.get("price", pd.Series(np.nan, index=df.index)), errors="coerce")
+    oas = pd.to_numeric(df.get("oas", pd.Series(np.nan, index=df.index)), errors="coerce")
+    lender_status = df.get("lender_stress_status", pd.Series("Non-Lender", index=df.index)).astype(str)
+
+
+    out = pd.Series("Performing", index=df.index, dtype=object)
+    out = out.mask(lender_status.eq("Stressed Lender Watch"), "Stressed Lender")
+    out = out.mask((price < STRESS_LABEL_PRICE) | (oas >= STRESS_LABEL_OAS), "Stressed Levels")
+    out = out.mask((price < 70) | (oas >= 1000), "Deeply Stressed")
+    out = out.mask(price.isna() | oas.isna(), "Unknown")
+    return out
+
+
 
 
 def normal_rv_eligible(df: pd.DataFrame) -> pd.Series:
@@ -828,35 +1073,47 @@ def normal_rv_eligible(df: pd.DataFrame) -> pd.Series:
     ytw = df["ytw"]
     years = df["years_to_worst"]
 
+
     rating_bucket_col = df.get("rating_bucket", pd.Series("OTHER", index=df.index)).astype(str).str.upper()
     core_status = df.get("core_universe_status", pd.Series("", index=df.index)).astype(str)
     lender_status = df.get("lender_stress_status", lender_stress_status(df)).astype(str)
 
+
+    excluded_lender = (
+        ["Stressed Lender Watch", "Distressed Lender Review"]
+        if CORE_UNIVERSE_MODE == "bb_b_only"
+        else ["Distressed Lender Review"]
+    )
+
+
     return (
         (core_status == "Core B/BB")
-        & (~lender_status.isin(["Stressed Lender Watch", "Distressed Lender Review"]))
-        & rating.isin(CORE_RATINGS_EXACT)
-        & rating_bucket_col.isin(CORE_RATING_BUCKETS)
+        & (~lender_status.isin(excluded_lender))
+        & rating.isin(scored_ratings_exact())
+        & rating_bucket_col.isin(scored_rating_buckets())
         & (sector_l2 != "CASH")
         & (rating != "CASH")
-        & (~rating.isin(["D", "C", "CC"]))
+        & (~rating.isin(NEVER_SCORED_RATINGS))
         & price.notna()
         & oas.notna()
-        & (price >= 80)
+        & (price >= universe_min_price())
         & (oas > 0)
-        & (oas < 800)
+        & (oas < universe_max_oas())
         & (ytw.fillna(0) < 50)
         & (years.fillna(0) >= 0.25)
     )
+
 
 def build_flags(df: pd.DataFrame) -> pd.Series:
     flags: List[pd.Series] = []
     base = pd.Series([""] * len(df), index=df.index, dtype=object)
 
+
     def append_flag(condition: pd.Series, label: str) -> None:
         nonlocal base
         base = np.where(condition, pd.Series(base, index=df.index).astype(str) + label + ";", base)
         base = pd.Series(base, index=df.index, dtype=object)
+
 
     rating = df["rating"].astype(str).str.upper()
     sector_l2 = df["sector_l2"].astype(str).str.upper()
@@ -873,6 +1130,9 @@ def build_flags(df: pd.DataFrame) -> pd.Series:
     status = df.get("core_universe_status", pd.Series("", index=df.index)).astype(str)
     append_flag(status.eq("Non-Core Rating"), "non_core_rating")
     append_flag(status.eq("Stressed Watch"), "stressed_watch")
+    stress = df.get("stress_label", pd.Series("", index=df.index)).astype(str)
+    append_flag(stress.eq("Stressed Levels"), "stressed_levels")
+    append_flag(stress.eq("Deeply Stressed"), "deeply_stressed")
     lender_status = df.get("lender_stress_status", pd.Series("Non-Lender", index=df.index)).astype(str)
     append_flag(lender_status.eq("Lender Performing"), "lender_finance")
     append_flag(lender_status.eq("Stressed Lender Watch"), "stressed_lender_watch")
@@ -880,8 +1140,11 @@ def build_flags(df: pd.DataFrame) -> pd.Series:
     return base.str.strip(";").replace("", "none")
 
 
+
+
 def build_curve_structure_bucket(df: pd.DataFrame) -> pd.Series:
     """Classify rough capital-structure bucket for issuer curve fitting.
+
 
     This is intentionally conservative and text-based. It prevents obvious secured,
     subordinated, and preferred bonds from being forced onto the same issuer curve
@@ -892,6 +1155,7 @@ def build_curve_structure_bucket(df: pd.DataFrame) -> pd.Series:
     typ = df.get("type", pd.Series("", index=df.index)).fillna("").astype(str)
     mty = df.get("mty_type", pd.Series("", index=df.index)).fillna("").astype(str)
     text = (desc + " " + typ + " " + mty).str.upper()
+
 
     bucket = pd.Series("UNSPECIFIED", index=df.index, dtype=object)
     bucket = bucket.mask(text.str.contains(r"\b(?:1ST|FIRST)\s+LIEN\b|\b1L\b", regex=True, na=False), "FIRST_LIEN")
@@ -904,6 +1168,8 @@ def build_curve_structure_bucket(df: pd.DataFrame) -> pd.Series:
     return bucket
 
 
+
+
 def latest_date(history: pd.DataFrame, requested: Optional[str] = None) -> pd.Timestamp:
     if requested:
         dt = pd.to_datetime(requested)
@@ -912,6 +1178,8 @@ def latest_date(history: pd.DataFrame, requested: Optional[str] = None) -> pd.Ti
             raise ValueError(f"Requested as-of date {requested} was not found. Latest available: {pd.Timestamp(available[-1]).date()}")
         return dt
     return pd.Timestamp(history["as_of_date"].max())
+
+
 
 
 def percentile_of_current(history: pd.DataFrame, current: pd.DataFrame, value_col: str, key_col: str, days: Optional[int]) -> pd.DataFrame:
@@ -932,8 +1200,11 @@ def percentile_of_current(history: pd.DataFrame, current: pd.DataFrame, value_co
     return out[["obs", "percentile"]]
 
 
+
+
 def historical_distribution_stats(history: pd.DataFrame, current: pd.DataFrame, value_col: str, key_col: str, days: Optional[int]) -> pd.DataFrame:
     """Return obs, median, p75, p90 and current distance from those levels.
+
 
     Percentiles alone can compress many names at 100 in wide markets. Distance-from-median
     gives the RV model a second dimension: how wide, not just widest-in-window.
@@ -958,6 +1229,8 @@ def historical_distribution_stats(history: pd.DataFrame, current: pd.DataFrame, 
     out["vs_p75"] = out["current_value"] - out["p75"]
     out["vs_p90"] = out["current_value"] - out["p90"]
     return out[["obs", "median", "p75", "p90", "vs_median", "vs_p75", "vs_p90"]]
+
+
 
 
 def percentile_of_current_external(
@@ -989,6 +1262,8 @@ def percentile_of_current_external(
     )
     out["percentile"] = np.where(out["obs"] > 0, 100.0 * out["le_current"] / out["obs"], np.nan)
     return out[["obs", "percentile"]]
+
+
 
 
 def historical_distribution_stats_external(
@@ -1025,8 +1300,11 @@ def historical_distribution_stats_external(
     return out[["obs", "median", "p75", "p90", "vs_median", "vs_p75", "vs_p90"]]
 
 
+
+
 def add_historical_peer_residuals(history: pd.DataFrame) -> pd.DataFrame:
     """Add historical peer residuals for true market-adjusted RV history.
+
 
     Raw OAS history can make many bonds look cheap when the whole market widens. This
     function creates a daily peer benchmark for every historical row and stores the
@@ -1041,10 +1319,12 @@ def add_historical_peer_residuals(history: pd.DataFrame) -> pd.DataFrame:
     result["hist_peer_count"] = np.nan
     result["hist_peer_median_oas"] = np.nan
 
+
     normal = result.loc[result["normal_rv_eligible"] & result["oas"].notna()].copy()
     if normal.empty:
         result["hist_peer_oas_residual"] = np.nan
         return result
+
 
     assigned = pd.Series(False, index=normal.index)
     peer_specs = [
@@ -1054,6 +1334,7 @@ def add_historical_peer_residuals(history: pd.DataFrame) -> pd.DataFrame:
         ("rating", ["as_of_date", "rating_bucket"], 25),
         ("all_normal_hy", ["as_of_date"], 50),
     ]
+
 
     for group_name, keys, min_count in peer_specs:
         group_obj = normal.groupby(keys, observed=True)["oas"]
@@ -1068,8 +1349,11 @@ def add_historical_peer_residuals(history: pd.DataFrame) -> pd.DataFrame:
         result.loc[idx, "hist_peer_median_oas"] = medians.loc[use].values
         assigned.loc[idx] = True
 
+
     result["hist_peer_oas_residual"] = result["oas"] - result["hist_peer_median_oas"]
     return result
+
+
 
 
 def add_residual_history_percentiles(history: pd.DataFrame, latest_rows: pd.DataFrame) -> pd.DataFrame:
@@ -1104,6 +1388,8 @@ def add_residual_history_percentiles(history: pd.DataFrame, latest_rows: pd.Data
     return result
 
 
+
+
 def distance_score(series: pd.Series) -> pd.Series:
     """Rank positive distance as cheap and negative distance as rich on a 0-100 scale."""
     out = pd.Series(np.nan, index=series.index, dtype=float)
@@ -1111,6 +1397,8 @@ def distance_score(series: pd.Series) -> pd.Series:
     if mask.sum() > 0:
         out.loc[mask] = series.loc[mask].rank(pct=True) * 100.0
     return out
+
+
 
 
 def peer_group_quality_label(count_value: object) -> str:
@@ -1126,6 +1414,8 @@ def peer_group_quality_label(count_value: object) -> str:
     return "Weak"
 
 
+
+
 def stability_label(bp_value: object) -> str:
     n = pd.to_numeric(pd.Series([bp_value]), errors="coerce").iloc[0]
     if pd.isna(n):
@@ -1137,6 +1427,8 @@ def stability_label(bp_value: object) -> str:
     return "Fragile"
 
 
+
+
 def cohort_context_label_from_pct(value: object) -> str:
     n = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(n):
@@ -1146,6 +1438,8 @@ def cohort_context_label_from_pct(value: object) -> str:
     if n <= 20:
         return "Cohort Rich/Tight"
     return "Cohort Fair"
+
+
 
 
 def relative_vs_absolute_label(signal: object, cohort_context: object) -> str:
@@ -1164,6 +1458,8 @@ def relative_vs_absolute_label(signal: object, cohort_context: object) -> str:
             return "Rich in rich cohort"
         return "Rich to peers in fair cohort"
     return "Relative signal only"
+
+
 
 
 def make_signal_caution_note(row: pd.Series) -> str:
@@ -1195,11 +1491,15 @@ def make_signal_caution_note(row: pd.Series) -> str:
     return "; ".join(ordered)
 
 
+
+
 def mode_or_unknown(values: pd.Series) -> str:
     vals = values.dropna().astype(str)
     if vals.empty:
         return "UNKNOWN"
     return vals.mode().iloc[0] if not vals.mode().empty else vals.iloc[0]
+
+
 
 
 def add_security_percentiles(history: pd.DataFrame, latest_rows: pd.DataFrame) -> pd.DataFrame:
@@ -1222,10 +1522,13 @@ def add_security_percentiles(history: pd.DataFrame, latest_rows: pd.DataFrame) -
     return result
 
 
+
+
 def add_peer_metrics(history: pd.DataFrame, latest_rows: pd.DataFrame) -> pd.DataFrame:
     log("Calculating latest-date peer medians and peer residuals...")
     result = latest_rows.copy()
     normal = result.loc[result["normal_rv_eligible"] & result["oas"].notna()].copy()
+
 
     # Broad fallback peer groups, all on latest date only. This is intentionally fast and explainable.
     peer_specs = [
@@ -1236,9 +1539,11 @@ def add_peer_metrics(history: pd.DataFrame, latest_rows: pd.DataFrame) -> pd.Dat
         ("rating", ["rating_bucket"]),
     ]
 
+
     result["peer_group_used"] = pd.Series([np.nan] * len(result), dtype=object)
     result["peer_count"] = np.nan
     result["peer_median_oas"] = np.nan
+
 
     assigned = pd.Series(False, index=result.index)
     for group_name, keys in peer_specs:
@@ -1250,6 +1555,7 @@ def add_peer_metrics(history: pd.DataFrame, latest_rows: pd.DataFrame) -> pd.Dat
         result.loc[use, "peer_median_oas"] = candidate.loc[use, "peer_median_oas"].values
         assigned |= use
 
+
     # Final fallback: all normal bonds on latest date.
     fallback_median = normal["oas"].median()
     fallback_count = normal["oas"].count()
@@ -1258,13 +1564,17 @@ def add_peer_metrics(history: pd.DataFrame, latest_rows: pd.DataFrame) -> pd.Dat
     result.loc[use, "peer_count"] = fallback_count
     result.loc[use, "peer_median_oas"] = fallback_median
 
+
     result["peer_oas_residual"] = result["oas"] - result["peer_median_oas"]
+
 
     # Latest-date percentile inside the selected group. Since groups may vary by fallback, use global residual rank as robust score.
     result["peer_oas_percentile_today"] = np.nan
     normal_idx = result.index[result["normal_rv_eligible"] & result["peer_oas_residual"].notna()]
     result.loc[normal_idx, "peer_oas_percentile_today"] = result.loc[normal_idx, "peer_oas_residual"].rank(pct=True) * 100.0
     return result
+
+
 
 
 def add_cohort_context_and_peer_quality(history: pd.DataFrame, latest_rows: pd.DataFrame) -> pd.DataFrame:
@@ -1281,15 +1591,18 @@ def add_cohort_context_and_peer_quality(history: pd.DataFrame, latest_rows: pd.D
             result[col] = np.nan
         return result
 
+
     rm_stats = normal_latest.groupby(["rating_bucket", "maturity_bucket"], observed=True)["oas"].agg(rm_peer_median="median", rm_peer_count="count").reset_index()
     r_stats = normal_latest.groupby(["rating_bucket"], observed=True)["oas"].agg(r_peer_median="median", r_peer_count="count").reset_index()
     all_median = normal_latest["oas"].median()
     result = result.merge(rm_stats, on=["rating_bucket", "maturity_bucket"], how="left")
     result = result.merge(r_stats, on=["rating_bucket"], how="left")
 
+
     result["peer_group_quality"] = result["peer_count"].apply(peer_group_quality_label)
     result["peer_median_stability_bp"] = np.nan
     result["peer_median_stability_label"] = "Unknown"
+
 
     group_keys_map = {
         "sector_l4_rating_maturity": ["sector_l4", "rating_bucket", "maturity_bucket"],
@@ -1299,6 +1612,7 @@ def add_cohort_context_and_peer_quality(history: pd.DataFrame, latest_rows: pd.D
         "rating": ["rating_bucket"],
         "all_normal_hy": [],
     }
+
 
     for group_name, keys in group_keys_map.items():
         mask = normal_latest["peer_group_used"].eq(group_name)
@@ -1326,6 +1640,7 @@ def add_cohort_context_and_peer_quality(history: pd.DataFrame, latest_rows: pd.D
             max_shift = max(shifts) if shifts else np.nan
             result.loc[idxs, "peer_median_stability_bp"] = max_shift
             result.loc[idxs, "peer_median_stability_label"] = stability_label(max_shift)
+
 
     def _shrunk_fair(row: pd.Series) -> float:
         peer = pd.to_numeric(pd.Series([row.get("peer_median_oas")]), errors="coerce").iloc[0]
@@ -1355,10 +1670,13 @@ def add_cohort_context_and_peer_quality(history: pd.DataFrame, latest_rows: pd.D
             return float(peer)
         return float(weight * peer + (1.0 - weight) * target)
 
+
     result["fair_oas_shrunk"] = result.apply(_shrunk_fair, axis=1)
     result["shrunk_peer_residual"] = result["oas"] - result["fair_oas_shrunk"]
 
+
     hist = history.loc[history["normal_rv_eligible"] & history["oas"].notna()].copy()
+
 
     # Component 2 v2.0 cohort valuation context.
     # Cohorts are intentionally built on exact B/BB rating notches and Level-4
@@ -1380,6 +1698,7 @@ def add_cohort_context_and_peer_quality(history: pd.DataFrame, latest_rows: pd.D
     assigned = pd.Series(False, index=result.index)
     cohort_daily_map: Dict[str, pd.DataFrame] = {}
 
+
     for group_name, keys, min_count in cohort_specs:
         daily = hist.groupby(["as_of_date"] + keys, observed=True)["oas"].agg(cohort_current_count="count", cohort_median_oas_hist="median").reset_index()
         cohort_daily_map[group_name] = daily
@@ -1391,13 +1710,16 @@ def add_cohort_context_and_peer_quality(history: pd.DataFrame, latest_rows: pd.D
         result.loc[use, "cohort_median_oas"] = candidate.loc[use, "cohort_median_oas"].values
         assigned |= use
 
+
     result["cohort_oas_pct_1y"] = np.nan
     result["cohort_oas_pct_full"] = np.nan
+
 
     def make_key(df: pd.DataFrame, group_name: str, keys: List[str]) -> pd.Series:
         if not keys:
             return pd.Series([group_name] * len(df), index=df.index)
         return group_name + "|" + df[keys].fillna("NA").astype(str).agg("|".join, axis=1)
+
 
     for group_name, keys, _ in cohort_specs:
         mask = result["cohort_group_used"].eq(group_name) & result["cohort_median_oas"].notna()
@@ -1420,9 +1742,12 @@ def add_cohort_context_and_peer_quality(history: pd.DataFrame, latest_rows: pd.D
             result.loc[sub.index, "cohort_oas_pct_full"] = full_pct
             result.loc[sub.index, "cohort_oas_pct_1y"] = pct_1y
 
+
     cohort_pct = result["cohort_oas_pct_1y"].fillna(result["cohort_oas_pct_full"])
     result["cohort_context_label"] = cohort_pct.apply(cohort_context_label_from_pct)
     return result
+
+
 
 
 def compute_issuer_daily(history: pd.DataFrame) -> pd.DataFrame:
@@ -1433,15 +1758,18 @@ def compute_issuer_daily(history: pd.DataFrame) -> pd.DataFrame:
         & history["oas"].notna()
     ].copy()
 
+
     # Company RV should be a relative-value measure, so issuer daily history is built from
     # normal-RV-eligible bonds. Distressed/event bonds are still retained via issuer flags.
     normal = use.loc[use["normal_rv_eligible"]].copy()
     if normal.empty:
         return pd.DataFrame()
 
+
     normal["oas_x_weight"] = normal["oas"] * normal["rv_weight"]
     normal["price_x_weight"] = normal["price"] * normal["rv_weight"]
     normal["ytw_x_weight"] = normal["ytw"] * normal["rv_weight"]
+
 
     grouped = normal.groupby(["as_of_date", "ticker"], observed=True).agg(
         issuer_bond_count=("bond_key", "nunique"),
@@ -1461,10 +1789,12 @@ def compute_issuer_daily(history: pd.DataFrame) -> pd.DataFrame:
         ytw_x_weight=("ytw_x_weight", "sum"),
     ).reset_index()
 
+
     grouped["issuer_weighted_oas"] = np.where(grouped["weight_sum"] > 0, grouped["oas_x_weight"] / grouped["weight_sum"], grouped["issuer_median_oas"])
     grouped["issuer_weighted_price"] = np.where(grouped["weight_sum"] > 0, grouped["price_x_weight"] / grouped["weight_sum"], grouped["issuer_median_price"])
     grouped["issuer_weighted_ytw"] = np.where(grouped["weight_sum"] > 0, grouped["ytw_x_weight"] / grouped["weight_sum"], grouped["issuer_median_ytw"])
     grouped = grouped.drop(columns=["oas_x_weight", "price_x_weight", "ytw_x_weight"])
+
 
     # Add daily issuer-level peer medians. These are based on issuer medians, not all bonds,
     # so a large issuer does not overwhelm the peer group.
@@ -1488,14 +1818,18 @@ def compute_issuer_daily(history: pd.DataFrame) -> pd.DataFrame:
         grouped.loc[use_mask, "issuer_peer_median_oas"] = candidate.loc[use_mask, "issuer_peer_median_oas"].values
         assigned |= use_mask
 
+
     grouped["issuer_peer_oas_residual"] = grouped["issuer_median_oas"] - grouped["issuer_peer_median_oas"]
     return grouped
+
+
 
 
 def add_issuer_percentiles(issuer_daily: pd.DataFrame, as_of_date: pd.Timestamp, latest_rows: pd.DataFrame) -> pd.DataFrame:
     current = issuer_daily.loc[issuer_daily["as_of_date"] == as_of_date].copy()
     if current.empty:
         return current
+
 
     for label, days in [("1y", 365), ("2y", 730), ("full", None)]:
         hist = issuer_daily.copy()
@@ -1531,9 +1865,11 @@ def add_issuer_percentiles(issuer_daily: pd.DataFrame, as_of_date: pd.Timestamp,
             keep_cols += ["issuer_oas_1y_median", "issuer_oas_1y_p75", "issuer_oas_1y_p90"]
         current = current.merge(pct[keep_cols], on="ticker", how="left")
 
+
     current["issuer_oas_vs_1y_median"] = current["issuer_median_oas"] - current["issuer_oas_1y_median"]
     current["issuer_oas_vs_1y_p75"] = current["issuer_median_oas"] - current["issuer_oas_1y_p75"]
     current["issuer_oas_vs_1y_p90"] = current["issuer_median_oas"] - current["issuer_oas_1y_p90"]
+
 
     # Issuer-level distress/event filter uses all current bonds, not just normal-RV bonds.
     all_current = latest_rows.loc[latest_rows["ticker"].notna() & (latest_rows["ticker"] != "UNKNOWN")].copy()
@@ -1554,10 +1890,12 @@ def add_issuer_percentiles(issuer_daily: pd.DataFrame, as_of_date: pd.Timestamp,
     all_stats["issuer_distressed_share"] = np.where(all_stats["all_bond_count"] > 0, all_stats["distressed_bond_count"] / all_stats["all_bond_count"], np.nan)
     current = current.merge(all_stats, on="ticker", how="left")
 
+
     flags = pd.Series([""] * len(current), index=current.index, dtype=object)
     def add_flag(mask: pd.Series, label: str) -> None:
         nonlocal flags
         flags = flags.mask(mask.fillna(False), flags + label + ";")
+
 
     add_flag(current["core_bond_count"].fillna(0).le(0), "no_core_b_or_bb_bonds")
     add_flag(current["all_median_oas"].ge(1000), "issuer_oas_above_1000")
@@ -1570,9 +1908,23 @@ def add_issuer_percentiles(issuer_daily: pd.DataFrame, as_of_date: pd.Timestamp,
     add_flag(current["stressed_lender_bond_count"].fillna(0).gt(0), "stressed_lender_bonds_present")
     add_flag(current["distressed_lender_bond_count"].fillna(0).gt(0), "distressed_lender_bonds_present")
     current["issuer_flags"] = flags.str.strip(";").replace("", "none")
-    # Stressed-watch issuers are not normal RV issuers in the monitor. They remain review items.
-    current["issuer_distressed_event"] = current["issuer_flags"].ne("none")
+    if CORE_UNIVERSE_MODE == "bb_b_only":
+        # Stressed-watch issuers are not normal RV issuers. They remain review items.
+        current["issuer_distressed_event"] = current["issuer_flags"].ne("none")
+    else:
+        # v2.1: wide or low-price issuers stay scored. Only issuers with no scoreable
+        # bonds, majority-distressed capital structures, or levels past the hard
+        # tradability gates go to the issuer review book. The other flags stay on the
+        # row as information.
+        current["issuer_distressed_event"] = (
+            current["core_bond_count"].fillna(0).le(0)
+            | current["all_median_oas"].ge(ALL_RATED_MAX_OAS)
+            | current["all_median_price"].lt(ALL_RATED_MIN_PRICE)
+            | current["issuer_distressed_share"].fillna(0).ge(0.50)
+            | current["distressed_lender_bond_count"].fillna(0).gt(0)
+        )
     current.loc[current["issuer_distressed_event"], "issuer_core_universe_status"] = "Issuer Review"
+
 
     # Confidence is not investment advice; it tells the user how much history/support exists.
     current["issuer_confidence"] = np.select(
@@ -1600,6 +1952,8 @@ def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
     return float(values[np.searchsorted(cumsum, cutoff, side="left")])
 
 
+
+
 def _weighted_line_fit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> Optional[np.ndarray]:
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -1613,8 +1967,11 @@ def _weighted_line_fit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> Optional[
         return None
 
 
+
+
 def _robust_weighted_line_fit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> Optional[np.ndarray]:
     """Two-pass weighted line fit with mild outlier downweighting.
+
 
     This avoids letting one odd bond dominate the issuer curve. The method remains
     simple and transparent: first fit a weighted line, then downweight observations
@@ -1639,6 +1996,8 @@ def _robust_weighted_line_fit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> Op
     return coeff
 
 
+
+
 def _weighted_r2(y: np.ndarray, fair: np.ndarray, w: np.ndarray) -> float:
     y = np.asarray(y, dtype=float)
     fair = np.asarray(fair, dtype=float)
@@ -1657,8 +2016,11 @@ def _weighted_r2(y: np.ndarray, fair: np.ndarray, w: np.ndarray) -> float:
     return float(1.0 - ss_res / ss_tot)
 
 
+
+
 def _fit_curve_segment(segment: pd.DataFrame, method_context: str) -> Dict[str, object]:
     """Fit a quality-controlled issuer curve segment.
+
 
     Returns fair values for the segment's rows plus diagnostics. The preferred method
     is leave-one-out robust weighted line fitting, because it prevents the target bond
@@ -1676,13 +2038,16 @@ def _fit_curve_segment(segment: pd.DataFrame, method_context: str) -> Dict[str, 
     w = w[valid]
     n = int(valid.sum())
 
+
     if n < 3:
         return {"index": idx, "fair": np.array([]), "method": "not_calculated", "confidence": "Unavailable", "reason": "insufficient_clean_curve_bonds", "r2": np.nan, "x_span": np.nan, "model_n": n}
+
 
     x_span = float(np.nanmax(x) - np.nanmin(x)) if n else np.nan
     fair = np.full(n, np.nan, dtype=float)
     method = ""
     reason = ""
+
 
     if x_span < 0.50:
         fair[:] = _weighted_median(y, w)
@@ -1730,6 +2095,7 @@ def _fit_curve_segment(segment: pd.DataFrame, method_context: str) -> Dict[str, 
             confidence = "Low"
             reason = "three_bond_curve_fallback_flat"
 
+
     r2 = _weighted_r2(y, fair, w)
     residuals = y - fair
     if np.isfinite(residuals).any() and np.nanmax(np.abs(residuals)) > 500:
@@ -1742,6 +2108,7 @@ def _fit_curve_segment(segment: pd.DataFrame, method_context: str) -> Dict[str, 
             confidence = "Low"
         reason = reason + ";extreme_curve_residual_review"
 
+
     return {
         "index": idx,
         "fair": fair,
@@ -1752,6 +2119,8 @@ def _fit_curve_segment(segment: pd.DataFrame, method_context: str) -> Dict[str, 
         "x_span": x_span,
         "model_n": n,
     }
+
+
 
 
 def add_issuer_curve_residuals(latest_rows: pd.DataFrame) -> pd.DataFrame:
@@ -1768,6 +2137,7 @@ def add_issuer_curve_residuals(latest_rows: pd.DataFrame) -> pd.DataFrame:
     result["issuer_curve_x_span"] = np.nan
     result["issuer_curve_segment_key"] = ""
 
+
     normal = result.loc[
         result["normal_rv_eligible"]
         & result["ticker"].notna()
@@ -1776,11 +2146,14 @@ def add_issuer_curve_residuals(latest_rows: pd.DataFrame) -> pd.DataFrame:
         & result["years_to_worst"].notna()
     ].copy()
 
+
     if normal.empty:
         return result
 
+
     assigned = pd.Series(False, index=result.index)
     fitted_segments = 0
+
 
     for ticker, group in normal.groupby("ticker", observed=True):
         ticker_idx = group.index
@@ -1789,9 +2162,11 @@ def add_issuer_curve_residuals(latest_rows: pd.DataFrame) -> pd.DataFrame:
             result.loc[ticker_idx, "issuer_curve_reason"] = f"insufficient_clean_curve_bonds_{len(group)}"
             continue
 
+
         bucket_counts = group["curve_structure_bucket"].fillna("UNSPECIFIED").value_counts()
         meaningful = bucket_counts.drop(labels=["UNSPECIFIED"], errors="ignore")
         segment_assigned = pd.Series(False, index=group.index)
+
 
         # First fit clean same-structure segments when available. This avoids comparing
         # secured, subordinated, preferred, and unsecured bonds on a single line when the
@@ -1817,9 +2192,11 @@ def add_issuer_curve_residuals(latest_rows: pd.DataFrame) -> pd.DataFrame:
             assigned.loc[idx] = True
             fitted_segments += 1
 
+
         remaining = group.loc[~segment_assigned]
         if remaining.empty:
             continue
+
 
         # If there are multiple known structure buckets and the remaining bonds do not
         # have enough same-structure observations, do not force an all-issuer curve.
@@ -1839,6 +2216,7 @@ def add_issuer_curve_residuals(latest_rows: pd.DataFrame) -> pd.DataFrame:
             result.loc[remaining.index, "issuer_curve_reason"] = "mixed_capital_structure_insufficient_same_structure_bonds"
             continue
 
+
         # Use an all-issuer curve when structure is unknown or mostly homogeneous. If it
         # mixes known and unknown structures, the fitted segment will still be retained,
         # but confidence is capped below High.
@@ -1856,6 +2234,7 @@ def add_issuer_curve_residuals(latest_rows: pd.DataFrame) -> pd.DataFrame:
                 confidence = "Medium"
                 reason = reason + ";mixed_or_unspecified_structure"
 
+
             result.loc[idx, "issuer_curve_fair_oas"] = fit["fair"]
             result.loc[idx, "issuer_curve_residual"] = result.loc[idx, "oas"].astype(float).to_numpy() - fit["fair"]
             result.loc[idx, "issuer_curve_model_bond_count"] = fit["model_n"]
@@ -1870,9 +2249,11 @@ def add_issuer_curve_residuals(latest_rows: pd.DataFrame) -> pd.DataFrame:
         else:
             result.loc[remaining.index, "issuer_curve_reason"] = f"insufficient_remaining_curve_bonds_{len(remaining)}"
 
+
     curve_available = result["issuer_curve_residual"].notna().sum()
     log(f"Issuer-curve residual coverage: {curve_available:,}/{len(result):,} latest bonds across {fitted_segments:,} curve segment(s).")
     return result
+
 
 def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.DataFrame:
     log("Scoring latest-date bonds with v2.0 internal-OAS weighted framework...")
@@ -1887,7 +2268,9 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
     ]
     result = result.merge(issuer_current[[c for c in issuer_cols if c in issuer_current.columns]].drop_duplicates("ticker"), on="ticker", how="left")
 
+
     normal_mask = result["normal_rv_eligible"].copy()
+
 
     def _weighted_component(frame: pd.DataFrame, weights: Dict[str, float]) -> pd.Series:
         """Weighted average of 0-100 component columns, normalized by active weights."""
@@ -1899,6 +2282,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
         weighted = part.mul(w, axis=1).sum(axis=1, skipna=True)
         active_w = part.notna().mul(w, axis=1).sum(axis=1)
         return pd.Series(np.where(active_w > 0, weighted / active_w, np.nan), index=frame.index, dtype=float)
+
 
     # 1) Historical peer-adjusted residual score: the model's core edge.
     # This asks whether today's peer residual is unusual versus the bond's own
@@ -1913,6 +2297,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
         {"residual_1y": 0.45, "residual_2y": 0.35, "residual_full": 0.20},
     )
 
+
     # 2) Cohort valuation context: whether the whole yardstick is rich/fair/cheap.
     cohort_frame = pd.DataFrame(index=result.index)
     cohort_frame["cohort_1y"] = result.get("cohort_oas_pct_1y", pd.Series(np.nan, index=result.index))
@@ -1922,6 +2307,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
         {"cohort_1y": 0.70, "cohort_full": 0.30},
     )
 
+
     # 3) Current shrunk peer residual: today's cross-sectional dislocation using
     # a shrunk fair OAS so thin cohorts do not over-control fair value.
     result["peer_score"] = np.nan
@@ -1929,6 +2315,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
     peer_mask = normal_mask & peer_source.notna()
     result.loc[peer_mask, "peer_score"] = peer_source.loc[peer_mask].rank(pct=True) * 100.0
     result["current_shrunk_peer_residual_score"] = result["peer_score"]
+
 
     # 4) Issuer context: issuer-level historical and peer-relative context.
     result["issuer_distance_score"] = distance_score(result["issuer_oas_vs_1y_median"])
@@ -1940,6 +2327,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
         issuer_frame,
         {"issuer_residual_1y": 0.60, "issuer_oas_1y": 0.20, "issuer_distance": 0.20},
     )
+
 
     # 5) Bond's own raw OAS history: useful as a sanity check, but intentionally
     # low weight because raw OAS can make every bond look cheap in a broad selloff.
@@ -1953,6 +2341,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
         own_frame,
         {"own_oas_1y": 0.50, "own_oas_2y": 0.20, "own_oas_full": 0.10, "own_distance": 0.20},
     )
+
 
     # 6) Spread momentum / recent cheapening. This remains a small overlay because
     # we do not yet have TRACE/volume/catalyst data. Higher score means more recent
@@ -1970,6 +2359,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
     if not mom_frame.empty:
         result["momentum_score"] = _weighted_component(mom_frame, {"mom_1d": 0.10, "mom_1w": 0.45, "mom_1m": 0.45})
 
+
     # Issuer curve residual remains available for diagnostics and switch candidates,
     # but it no longer contributes an overlay to rv_score in v2.0.
     result["curve_score_raw"] = np.nan
@@ -1980,6 +2370,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
     result.loc[curve_mask, "curve_score_raw"] = result.loc[curve_mask, "issuer_curve_residual"].rank(pct=True) * 100.0
     curve_factor = curve_confidence.map({"High": 1.00, "Medium": 0.65}).fillna(0.0)
     result.loc[curve_mask, "curve_score"] = 50.0 + (result.loc[curve_mask, "curve_score_raw"] - 50.0) * curve_factor.loc[curve_mask]
+
 
     # v2.0 internal-data weighting. These are true percentages that sum to
     # 100%, and the final average is still normalized by active weights when a
@@ -1999,11 +2390,13 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
         "own_oas_history_score": 0.10,
     })
 
+
     weighted_sum = components.mul(weights, axis=1).sum(axis=1, skipna=True)
     weight_sum = components.notna().mul(weights, axis=1).sum(axis=1)
     result["rv_score_base"] = np.where(weight_sum > 0, weighted_sum / weight_sum, np.nan)
     result["rv_score"] = result["rv_score_base"].clip(lower=0.0, upper=100.0)
     result["rv_score_method"] = "v2.0: 40 hist residual + 20 Level-4/notch cohort + 15 shrunk peer + 15 issuer + 10 own OAS; no momentum; no curve overlay"
+
 
     # Do not allow issuer-level distressed/event companies to appear as normal bond RV candidates.
     issuer_distress = result.get("issuer_distressed_event", pd.Series(False, index=result.index)).fillna(False).astype(bool)
@@ -2016,6 +2409,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
     result.loc[~normal_mask, "rv_score_base"] = np.nan
     result.loc[~normal_mask, "issuer_curve_overlay_points"] = 0.0
 
+
     residual_obs = result.get("residual_oas_obs_1y", pd.Series(np.nan, index=result.index)).fillna(0)
     issuer_conf = result.get("issuer_confidence", pd.Series("Low", index=result.index)).fillna("Low")
     support_score = pd.Series(0.0, index=result.index, dtype=float)
@@ -2024,6 +2418,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
     support_score += result.get("peer_group_quality", pd.Series("Weak", index=result.index)).map({"Strong": 1.0, "Acceptable": 0.7, "Thin": 0.3, "Weak": 0.0}).fillna(0.0)
     support_score += result.get("peer_median_stability_label", pd.Series("Unknown", index=result.index)).map({"Strong": 0.8, "Moderate": 0.4, "Fragile": 0.0}).fillna(0.0)
     support_score += issuer_conf.map({"High": 0.5, "Medium": 0.25}).fillna(0.0)
+
 
     result["model_support"] = np.select(
         [support_score >= 3.0, support_score >= 1.8],
@@ -2038,6 +2433,7 @@ def score_latest(latest_rows: pd.DataFrame, issuer_current: pd.DataFrame) -> pd.
     result["rv_note"] = result.apply(make_bond_note, axis=1)
     return result
 
+
 def score_to_signal(score: object) -> str:
     if pd.isna(score):
         return "No Score"
@@ -2051,6 +2447,8 @@ def score_to_signal(score: object) -> str:
     if score > 20:
         return "Rich"
     return "Very Rich"
+
+
 
 
 def issuer_signal_from_score(score: object, distressed: object = False) -> str:
@@ -2070,10 +2468,13 @@ def issuer_signal_from_score(score: object, distressed: object = False) -> str:
     return "Very Rich"
 
 
+
+
 def fmt_num(value: object, decimals: int = 1) -> str:
     if pd.isna(value):
         return "n/a"
     return f"{float(value):,.{decimals}f}"
+
 
 def fmt_coupon(value: object) -> str:
     if pd.isna(value):
@@ -2082,6 +2483,8 @@ def fmt_coupon(value: object) -> str:
         return f"{float(value):.3f}".rstrip("0").rstrip(".") + "%"
     except Exception:
         return str(value)
+
+
 
 
 def fmt_maturity(value: object) -> str:
@@ -2093,12 +2496,16 @@ def fmt_maturity(value: object) -> str:
         return str(value)
 
 
+
+
 def make_bond_label(row: pd.Series) -> str:
     coupon = fmt_coupon(row.get("coupon"))
     maturity = fmt_maturity(row.get("maturity_date"))
     pieces = [str(row.get("ticker", "")).strip(), coupon, maturity]
     label = " ".join([p for p in pieces if p and p.lower() != "nan"])
     return label if label else str(row.get("description", ""))
+
+
 
 
 def make_bond_snippet(row: pd.Series) -> str:
@@ -2111,8 +2518,11 @@ def make_bond_snippet(row: pd.Series) -> str:
     return f"{ident} | {label} | OAS {oas} | score {score}"
 
 
+
+
 def make_curve_note(row: pd.Series) -> str:
     """Return an issuer-curve note only when the curve was actually used.
+
 
     Most high-yield issuers do not have enough clean, comparable same-issuer bonds
     to support a reliable curve. For those bonds, the curve component is not used in
@@ -2128,12 +2538,15 @@ def make_curve_note(row: pd.Series) -> str:
     return f"issuer-curve residual {fmt_num(residual, 0)} bp; curve confidence {confidence}; curve bonds {model_n}"
 
 
+
+
 def make_bond_note(row: pd.Series) -> str:
     if not bool(row.get("normal_rv_eligible", False)):
         status = row.get("core_universe_status", "Review")
         lender_status = row.get("lender_stress_status", "")
         lender_text = f"; lender filter: {lender_status}" if str(lender_status) in {"Stressed Lender Watch", "Distressed Lender Review"} else ""
         return f"Excluded from Core B/BB RV monitor ({status}{lender_text}). Flags: {row.get('flags', 'none')}."
+
 
     parts = [
         f"OAS {fmt_num(row.get('oas'), 0)} bp",
@@ -2156,6 +2569,8 @@ def make_bond_note(row: pd.Series) -> str:
     if caution:
         note += f" Why this may be misleading: {caution}."
     return note
+
+
 
 
 def build_issuer_output(issuer_current: pd.DataFrame) -> pd.DataFrame:
@@ -2188,6 +2603,8 @@ def build_issuer_output(issuer_current: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+
+
 def add_issuer_bond_summaries(issuer_output: pd.DataFrame, bond_latest: pd.DataFrame) -> pd.DataFrame:
     """Attach the specific CUSIPs driving each issuer's cheap/rich signal."""
     result = issuer_output.copy()
@@ -2196,9 +2613,11 @@ def add_issuer_bond_summaries(issuer_output: pd.DataFrame, bond_latest: pd.DataF
         result["rich_bond_cusips"] = ""
         return result
 
+
     bonds = bond_latest.loc[bond_latest["normal_rv_eligible"] & bond_latest["rv_score"].notna()].copy()
     if "bond_label" not in bonds.columns:
         bonds["bond_label"] = bonds.apply(make_bond_label, axis=1)
+
 
     cheap_map: Dict[str, str] = {}
     rich_map: Dict[str, str] = {}
@@ -2208,9 +2627,12 @@ def add_issuer_bond_summaries(issuer_output: pd.DataFrame, bond_latest: pd.DataF
         cheap_map[ticker] = "; ".join(make_bond_snippet(r) for _, r in cheap_rows.iterrows())
         rich_map[ticker] = "; ".join(make_bond_snippet(r) for _, r in rich_rows.iterrows())
 
+
     result["cheap_bond_cusips"] = result["ticker"].map(cheap_map).fillna("")
     result["rich_bond_cusips"] = result["ticker"].map(rich_map).fillna("")
     return result
+
+
 
 
 def build_switch_candidates(bond_latest: pd.DataFrame) -> pd.DataFrame:
@@ -2257,8 +2679,11 @@ def build_switch_candidates(bond_latest: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("gross_residual_pickup_bp", ascending=False) if rows else pd.DataFrame()
 
 
+
+
 def review_priority_score(df: pd.DataFrame) -> pd.Series:
     """Prioritize the HY / Distressed Review page.
+
 
     Higher score means more urgent review. This is not a rich/cheap score; it is a
     risk / attention score driven by OAS, price stress, rating weakness, and recent
@@ -2271,6 +2696,8 @@ def review_priority_score(df: pd.DataFrame) -> pd.Series:
     one_w = pd.to_numeric(df.get("oas_1w_chg", pd.Series(np.nan, index=df.index)), errors="coerce").fillna(0).clip(lower=-250, upper=500)
     price_stress = (100 - price).clip(lower=0, upper=100).fillna(0)
     return (oas / 25.0) + (price_stress * 1.5) + (rating_s * 8.0) + (one_m.clip(lower=0) / 5.0) + (one_w.clip(lower=0) / 4.0)
+
+
 
 
 def issuer_review_summary(latest_rows: pd.DataFrame) -> pd.DataFrame:
@@ -2332,6 +2759,9 @@ def issuer_review_summary(latest_rows: pd.DataFrame) -> pd.DataFrame:
 
 
 
+
+
+
 def write_dashboard_history_files(
     output_dir: Path,
     history: pd.DataFrame,
@@ -2342,6 +2772,7 @@ def write_dashboard_history_files(
 ) -> None:
     """Write chart-ready history files for dashboard tear sheets.
 
+
     These files are intentionally limited to the latest monitor constituents and a
     roughly one-year lookback so the static dashboard can load them quickly. They
     power the Price/OAS Momentum Strip and the OAS-vs-peer history chart shown
@@ -2351,6 +2782,7 @@ def write_dashboard_history_files(
     if history.empty:
         return
     start_date = as_of_date - pd.Timedelta(days=lookback_days)
+
 
     chart_cols = [
         "as_of_date",
@@ -2377,6 +2809,7 @@ def write_dashboard_history_files(
         "hist_peer_oas_residual",
     ]
 
+
     def safe_chart_frame(keys: pd.Series) -> pd.DataFrame:
         keys = keys.dropna().astype(str).unique()
         if len(keys) == 0:
@@ -2399,11 +2832,57 @@ def write_dashboard_history_files(
         hist = hist.sort_values(["bond_key", "as_of_date"])
         return hist[chart_cols + ["price_change_1d_from_prev"]]
 
+
     core_hist = safe_chart_frame(core_bonds.get("bond_key", pd.Series(dtype=object)))
     review_hist = safe_chart_frame(review_bonds.get("bond_key", pd.Series(dtype=object)))
 
+
     core_hist.to_csv(output_dir / "bond_history_core_dashboard.csv", index=False)
     review_hist.to_csv(output_dir / "bond_history_other_dashboard.csv", index=False)
+
+
+def core_exclusion_reason(df: pd.DataFrame) -> pd.Series:
+    """Explain, per bond, why a latest-date row is not in the Core B/BB output.
+
+    Written for the core_exclusion_report.csv diagnostic so missing tickers can
+    be traced to a specific rule instead of silently disappearing.
+    """
+    rating = df.get("rating", pd.Series("", index=df.index)).astype(str).str.upper().str.strip()
+    rating_bucket_col = df.get("rating_bucket", pd.Series("OTHER", index=df.index)).astype(str).str.upper()
+    sector_l2 = df.get("sector_l2", pd.Series("", index=df.index)).astype(str).str.upper()
+    status = df.get("core_universe_status", pd.Series("", index=df.index)).astype(str)
+    lender_status = df.get("lender_stress_status", pd.Series("Non-Lender", index=df.index)).astype(str)
+    price = pd.to_numeric(df.get("price", pd.Series(np.nan, index=df.index)), errors="coerce")
+    oas = pd.to_numeric(df.get("oas", pd.Series(np.nan, index=df.index)), errors="coerce")
+    ytw = pd.to_numeric(df.get("ytw", pd.Series(np.nan, index=df.index)), errors="coerce")
+    years = pd.to_numeric(df.get("years_to_worst", pd.Series(np.nan, index=df.index)), errors="coerce")
+
+    reasons = pd.Series("", index=df.index, dtype=object)
+
+    def add(cond: pd.Series, label: str) -> None:
+        nonlocal reasons
+        reasons = reasons.mask(cond & reasons.ne(""), reasons + "; " + label)
+        reasons = reasons.mask(cond & reasons.eq(""), label)
+
+    add((sector_l2 == "CASH") | (rating == "CASH"), "cash row")
+    add(price.isna(), "missing price")
+    add(oas.isna(), "missing OAS")
+    add(~rating.isin(scored_ratings_exact()), "rating '" + rating + "' not scoreable")
+    add(rating.isin(scored_ratings_exact()) & ~rating_bucket_col.isin(scored_rating_buckets()), "rating bucket " + rating_bucket_col)
+    add(price.lt(universe_min_price()), f"price < {universe_min_price():g}")
+    add(oas.ge(universe_max_oas()), f"OAS >= {universe_max_oas():g}")
+    add(oas.le(0), "OAS <= 0")
+    add(ytw.fillna(0).ge(50), "YTW >= 50")
+    add(years.fillna(0).lt(0.25), "years to worst < 0.25")
+    excluded_lender = (
+        ["Stressed Lender Watch", "Distressed Lender Review"]
+        if CORE_UNIVERSE_MODE == "bb_b_only"
+        else ["Distressed Lender Review"]
+    )
+    add(lender_status.isin(excluded_lender), "lender stress: " + lender_status)
+    add(reasons.eq("") & status.ne("Core B/BB"), "status: " + status)
+    return reasons.replace("", "unknown (check normal_rv_eligible)")
+
 
 def write_outputs(
     output_dir: Path,
@@ -2417,13 +2896,16 @@ def write_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     log(f"Writing outputs to: {output_dir}")
 
+
     bond_latest = bond_latest.copy()
     bond_latest["review_bucket"] = bond_latest["core_universe_status"]
     bond_latest["review_priority_score"] = review_priority_score(bond_latest)
 
-    exact_core_rating = bond_latest["rating"].astype(str).str.upper().str.strip().isin(CORE_RATINGS_EXACT)
+
+    exact_core_rating = bond_latest["rating"].astype(str).str.upper().str.strip().isin(scored_ratings_exact())
     normal_bonds = bond_latest.loc[bond_latest["normal_rv_eligible"] & exact_core_rating & bond_latest["core_universe_status"].eq("Core B/BB")].copy()
     review_bonds = bond_latest.loc[~(bond_latest.index.isin(normal_bonds.index))].copy()
+
 
     def safe_cols(df: pd.DataFrame, cols: Sequence[str]) -> pd.DataFrame:
         out = df.copy()
@@ -2432,16 +2914,20 @@ def write_outputs(
                 out[col] = np.nan
         return out[list(cols)]
 
+
     bond_out = safe_cols(normal_bonds.sort_values("rv_score", ascending=False), OUTPUT_BOND_COLUMNS)
     review_bond_out = safe_cols(review_bonds.sort_values("review_priority_score", ascending=False), OUTPUT_BOND_COLUMNS)
 
-    issuer_core_rating = issuer_output.get("issuer_rating_bucket", pd.Series("", index=issuer_output.index)).astype(str).str.upper().isin(CORE_RATING_BUCKETS)
+
+    issuer_core_rating = issuer_output.get("issuer_rating_bucket", pd.Series("", index=issuer_output.index)).astype(str).str.upper().isin(scored_rating_buckets())
     issuer_distress_flag = issuer_output.get("issuer_distressed_event", pd.Series(False, index=issuer_output.index)).fillna(False)
     issuer_normal = issuer_output.loc[(~issuer_distress_flag) & issuer_core_rating].copy()
     issuer_out = safe_cols(issuer_normal.sort_values("issuer_score", ascending=False), ISSUER_OUTPUT_COLUMNS)
 
+
     issuer_review = issuer_review_summary(review_bonds)
     issuer_review_out = safe_cols(issuer_review.sort_values("issuer_review_priority_score", ascending=False), ISSUER_OUTPUT_COLUMNS)
+
 
     # Backward-compatible core outputs plus explicit split-monitor outputs.
     bond_out.to_csv(output_dir / "bond_rv_latest.csv", index=False)
@@ -2449,14 +2935,42 @@ def write_outputs(
     bond_out.to_csv(output_dir / "bond_rv_core_latest.csv", index=False)
     issuer_out.to_csv(output_dir / "issuer_rv_core_latest.csv", index=False)
     review_bond_out.to_csv(output_dir / "bond_rv_other_latest.csv", index=False)
+
+    # Diagnostic: every latest-date bond excluded from core, with the exact reason.
+    exclusion = review_bonds.copy()
+    exclusion["exclusion_reason"] = core_exclusion_reason(exclusion)
+    exclusion_cols = [
+        c for c in [
+            "as_of_date", "ticker", "description", "cusip", "isin",
+            "rating_raw", "rating", "rating_bucket", "core_universe_status",
+            "lender_stress_status", "price", "oas", "ytw", "years_to_worst",
+            "flags", "exclusion_reason",
+        ] if c in exclusion.columns
+    ]
+    exclusion[exclusion_cols].sort_values(["ticker", "oas"], na_position="last").to_csv(
+        output_dir / "core_exclusion_report.csv", index=False
+    )
+
+    core_tickers = set(normal_bonds.get("ticker", pd.Series(dtype=object)).astype(str))
+    missing = (
+        exclusion.loc[~exclusion["ticker"].astype(str).isin(core_tickers)]
+        .groupby("ticker", observed=True)["exclusion_reason"]
+        .agg(lambda v: v.value_counts().index[0])
+    )
+    if len(missing):
+        log(f"Tickers in latest H0A0 with zero Core B/BB bonds: {len(missing):,} (see core_exclusion_report.csv)")
+        for tk, reason in missing.items():
+            log(f"  {tk}: {reason}")
     issuer_review_out.to_csv(output_dir / "issuer_rv_other_latest.csv", index=False)
     review_bond_out.to_csv(output_dir / "distressed_event_latest.csv", index=False)
     issuer_review_out.to_csv(output_dir / "issuer_distressed_event_latest.csv", index=False)
     switches.to_csv(output_dir / "issuer_switch_candidates.csv", index=False)
 
+
     latest_dt = pd.Timestamp(bond_latest["as_of_date"].max()) if not bond_latest.empty else pd.NaT
     if not pd.isna(latest_dt):
         write_dashboard_history_files(output_dir, history, bond_out, review_bond_out, latest_dt)
+
 
     report_lines = []
     report_lines.append("H0A0 Historical Relative Value Data Quality Report")
@@ -2468,6 +2982,7 @@ def write_outputs(
     report_lines.append(f"Latest-date bonds: {len(bond_latest):,}")
     report_lines.append(f"Core B/BB Performing RV bonds: {len(normal_bonds):,}")
     report_lines.append(f"HY / Distressed Review bonds: {len(review_bonds):,}")
+    report_lines.append("Per-bond exclusion reasons: core_exclusion_report.csv")
     if "lender_stress_status" in review_bonds.columns:
         lender_counts = review_bonds["lender_stress_status"].value_counts(dropna=False)
         report_lines.append("Lender stress filter distribution in review universe:")
@@ -2510,6 +3025,7 @@ def write_outputs(
             report_lines.append(f"  {err.get('file')}: {err.get('error')}")
     (output_dir / "data_quality_report.txt").write_text("\n".join(report_lines), encoding="utf-8")
 
+
     xlsx_path = output_dir / "h0a0_relative_value_report.xlsx"
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         bond_out.head(150).to_excel(writer, sheet_name="Core BB B Cheap", index=False)
@@ -2519,6 +3035,7 @@ def write_outputs(
         review_bond_out.head(200).to_excel(writer, sheet_name="HY Distressed Review", index=False)
         issuer_review_out.head(150).to_excel(writer, sheet_name="Review Issuers", index=False)
         switches.head(100).to_excel(writer, sheet_name="Issuer Switches", index=False)
+
 
 def run_pipeline(
     history_dir: Path,
@@ -2539,6 +3056,7 @@ def run_pipeline(
         history_lookback_months=history_lookback_months,
     )
 
+
     dt = latest_date(history, as_of_date)
     log(f"Using as-of date: {dt.date()}")
     if not history.empty:
@@ -2551,23 +3069,29 @@ def run_pipeline(
     if latest_rows.empty:
         raise RuntimeError(f"No latest rows found for {dt.date()}")
 
+
     latest_rows = add_security_percentiles(history, latest_rows)
     latest_rows = add_peer_metrics(history, latest_rows)
     latest_rows = add_cohort_context_and_peer_quality(history, latest_rows)
     latest_rows = add_residual_history_percentiles(history, latest_rows)
     latest_rows = add_issuer_curve_residuals(latest_rows)
 
+
     issuer_daily = compute_issuer_daily(history)
     issuer_current = add_issuer_percentiles(issuer_daily, dt, latest_rows)
     issuer_output = build_issuer_output(issuer_current)
+
 
     bond_latest = score_latest(latest_rows, issuer_current)
     issuer_output = add_issuer_bond_summaries(issuer_output, bond_latest)
     switches = build_switch_candidates(bond_latest)
     write_outputs(output_dir, history, bond_latest, issuer_output, switches, parse_report, used_cache)
 
+
     log("H0A0 Relative Value finished successfully.")
     log(f"Open: {output_dir / 'h0a0_relative_value_report.xlsx'}")
+
+
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -2578,6 +3102,28 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--rebuild-cache", action="store_true", help="Force reparsing source files and rebuilding cache.")
     parser.add_argument("--max-files", type=int, default=None, help="Test mode: use only the latest N files.")
     parser.add_argument(
+        "--core-universe",
+        choices=["all_rated", "bb_b_only"],
+        default="all_rated",
+        help=(
+            "Which bonds get scored into the core output. 'all_rated' (default) scores every "
+            "performing rated bond including BBB crossover and CCC notches. 'bb_b_only' restores "
+            "the pre-v2.1 BB1-B3 restriction."
+        ),
+    )
+    parser.add_argument(
+        "--min-price",
+        type=float,
+        default=ALL_RATED_MIN_PRICE,
+        help=f"Dollar price floor for the scored universe under all_rated. Default {ALL_RATED_MIN_PRICE:g}.",
+    )
+    parser.add_argument(
+        "--max-oas",
+        type=float,
+        default=ALL_RATED_MAX_OAS,
+        help=f"OAS ceiling (bp) for the scored universe under all_rated. Default {ALL_RATED_MAX_OAS:g}.",
+    )
+    parser.add_argument(
         "--history-lookback-months", "--history-months",
         dest="history_lookback_months",
         type=int,
@@ -2587,14 +3133,26 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    global CORE_UNIVERSE_MODE, ALL_RATED_MIN_PRICE, ALL_RATED_MAX_OAS
     args = parse_args(argv)
+    CORE_UNIVERSE_MODE = args.core_universe
+    ALL_RATED_MIN_PRICE = float(args.min_price)
+    ALL_RATED_MAX_OAS = float(args.max_oas)
+    log(
+        f"Scored universe: {CORE_UNIVERSE_MODE} "
+        f"(price >= {universe_min_price():g}, OAS < {universe_max_oas():g})"
+    )
     history_dir = Path(args.history_dir)
     output_dir = Path(args.output_dir)
+
 
     if not history_dir.exists():
         log(f"ERROR: history directory does not exist: {history_dir}")
         return 2
+
 
     try:
         run_pipeline(
@@ -2612,6 +3170,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         log(f"ERROR: {exc}")
         raise
     return 0
+
+
 
 
 if __name__ == "__main__":
