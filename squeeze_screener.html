@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Short Interest Monitor — SMRD</title>
+<!--
+  Standalone SMRD tool page. Not part of site.html.
+  Combines the two other standalone tools client-side, by fetching BOTH:
+    ./markit_dtc.json          (from markit_dtc.py)
+    ./squeeze_screener.json    (from squeeze_screener.py)
+  Deploy this file alongside both JSON outputs in the same Neocities folder.
+  Neither Python script changes -- this page only joins their outputs by
+  CUSIP and adds a crowding-vs-momentum quadrant read on top.
+
+  Why a quadrant: DTC (crowding) and the squeeze momentum components answer
+  different questions. A bond can be highly crowded with nothing changing
+  (stable risk), or not yet crowded but tightening fast (an early read that
+  doesn't top either tool's own leaderboard by itself). Plotting both axes
+  together surfaces that "emerging" case explicitly instead of leaving it
+  buried in a single blended number.
+-->
+<style>
+  :root{
+    --sans: "Neue Haas Grotesk Display","Bw Haas Grotesk",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+    --mono: Consolas,"SF Mono","Roboto Mono","Courier New",monospace;
+
+    --paper:#ffffff;
+    --ink:#14171c;
+    --ink-soft:#5b6472;
+    --ink-faint:#8b93a1;
+    --line:#e2e5e9;
+    --line-strong:#c9cdd4;
+    --panel:#f7f8f9;
+
+    --green:#2e7d5b;   --green-bg:#e7f3ee;
+    --amber:#a6791f;   --amber-bg:#faf1de;
+    --rust:#b23b2e;    --rust-bg:#fbeae8;
+    --blue:#2b5b8c;    --blue-bg:#eaf1f8;
+    --purple:#5b4a9c;  --purple-bg:#eeecf6;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);font-family:var(--sans);}
+  body{font-size:13px;line-height:1.5;padding:28px 32px 64px;max-width:1280px;margin:0 auto;}
+
+  header{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:20px;}
+  .eyebrow{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px;}
+  h1{font-size:22px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em;}
+  .sub{color:var(--ink-soft);font-size:13px;margin:0;}
+  .lag-note{display:inline-flex;align-items:center;gap:6px;margin-top:10px;font-size:11.5px;color:var(--amber);background:var(--amber-bg);border:1px solid #efdcae;padding:4px 10px;border-radius:3px;}
+
+  .layout{display:grid;grid-template-columns:400px 1fr;gap:24px;margin:20px 0;align-items:start;}
+  @media (max-width: 900px){ .layout{grid-template-columns:1fr;} }
+
+  .quad-panel{border:1px solid var(--line);border-radius:6px;padding:14px;}
+  .quad-title{font-size:12px;font-weight:600;margin:0 0 4px;}
+  .quad-sub{font-size:11px;color:var(--ink-faint);margin:0 0 10px;}
+  svg{width:100%;height:auto;display:block;}
+  .axis-label{font-size:9.5px;fill:var(--ink-faint);font-family:var(--sans);}
+  .qzone{opacity:.55;}
+  .qpoint{cursor:pointer;stroke:var(--paper);stroke-width:1.2;}
+  .qpoint:hover{stroke:var(--ink);stroke-width:1.6;}
+
+  .qlegend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+  .qlegend-item{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--ink-soft);}
+  .qdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+
+  .stat-cards{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;}
+  .stat-card{border:1px solid var(--line);border-radius:4px;padding:9px 10px;}
+  .stat-card .n{font-family:var(--mono);font-size:17px;font-weight:600;}
+  .stat-card .l{font-size:10px;color:var(--ink-faint);margin-top:1px;}
+  .stat-card.emerging{border-color:var(--purple);background:var(--purple-bg);}
+  .stat-card.emerging .n, .stat-card.emerging .l{color:var(--purple);}
+
+  .callout{border:1px solid var(--purple);background:var(--purple-bg);border-radius:6px;padding:12px 14px;margin-bottom:18px;}
+  .callout h2{font-size:12.5px;font-weight:600;margin:0 0 3px;color:var(--purple);}
+  .callout p{margin:0 0 8px;font-size:11.5px;color:var(--purple);opacity:.85;}
+  .callout-list{display:flex;flex-wrap:wrap;gap:6px;}
+  .callout-chip{font-family:var(--mono);font-size:11px;background:var(--paper);border:1px solid var(--purple);color:var(--purple);padding:3px 9px;border-radius:3px;cursor:pointer;}
+  .callout-chip:hover{background:var(--purple);color:var(--paper);}
+  .callout-empty{font-size:11.5px;color:var(--purple);opacity:.7;}
+
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:22px 0 10px;}
+  .controls input[type=text]{font-family:var(--sans);font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:3px;width:220px;}
+  .controls select{font-family:var(--sans);font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:3px;background:var(--paper);color:var(--ink);}
+  .controls .count{margin-left:auto;font-size:12px;color:var(--ink-faint);}
+
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  thead th{text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);border-bottom:1px solid var(--line-strong);padding:7px 8px;cursor:pointer;white-space:nowrap;}
+  thead th:hover{color:var(--ink);}
+  thead th.num,td.num{text-align:right;}
+  tbody td{padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  tbody tr.rowline:hover{background:var(--panel);}
+  tbody tr.rowline{cursor:pointer;}
+  td.mono{font-family:var(--mono);}
+  td.name{font-weight:600;}
+  td.cusip{color:var(--ink-faint);font-family:var(--mono);font-size:11px;}
+
+  .qtag{display:inline-block;font-size:9.5px;font-weight:600;padding:2px 6px;border-radius:2px;white-space:nowrap;}
+  .qtag.building{background:var(--rust-bg);color:var(--rust);}
+  .qtag.stable{background:var(--amber-bg);color:var(--amber);}
+  .qtag.emerging{background:var(--purple-bg);color:var(--purple);}
+  .qtag.quiet{background:var(--panel);color:var(--ink-faint);}
+  .qtag.na{background:var(--panel);color:var(--ink-faint);}
+
+  .read-row{display:none;}
+  .read-row.open{display:table-row;}
+  .read-cell{padding:0 8px 14px !important;border-bottom:1px solid var(--line);background:var(--panel);}
+  .read-box{padding:10px 12px;font-size:12px;color:var(--ink);}
+  .read-box b{font-weight:600;}
+  .read-meta{margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--ink-soft);}
+
+  .empty{padding:40px 0;text-align:center;color:var(--ink-faint);font-size:13px;}
+  .fetch-error{padding:16px;border:1px solid var(--rust);background:var(--rust-bg);color:var(--rust);border-radius:3px;font-size:12.5px;margin:20px 0;}
+  .fetch-error code{font-family:var(--mono);background:rgba(0,0,0,.05);padding:1px 5px;border-radius:2px;}
+
+  footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--ink-faint);}
+</style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">SMRD &middot; standalone tool</p>
+  <h1>Short interest monitor</h1>
+  <p class="sub">Crowding (days-to-cover) plotted against momentum (fee/utilization/lendable/flow) for every H0A0 bond with short data on file.</p>
+  <span class="lag-note">Markit data typically lags TRACE by 2&ndash;3 days &mdash; treat as a positioning read, not a same-day signal.</span>
+</header>
+
+<div class="layout">
+  <div class="quad-panel">
+    <p class="quad-title">Crowding vs momentum</p>
+    <p class="quad-sub">Each dot is a bond. Position = current crowding (x) vs how fast that's changing (y).</p>
+    <svg id="quadSvg" viewBox="0 0 380 320"></svg>
+    <div class="qlegend">
+      <div class="qlegend-item"><span class="qdot" style="background:var(--rust)"></span>Building squeeze</div>
+      <div class="qlegend-item"><span class="qdot" style="background:var(--amber)"></span>Stable crowded</div>
+      <div class="qlegend-item"><span class="qdot" style="background:var(--purple)"></span>Emerging</div>
+      <div class="qlegend-item"><span class="qdot" style="background:var(--ink-faint)"></span>Quiet</div>
+    </div>
+    <div class="stat-cards" id="statCards"></div>
+  </div>
+
+  <div>
+    <div class="callout" id="emergingCallout">
+      <h2>Emerging &mdash; worth a look before it shows up elsewhere</h2>
+      <p>Not yet crowded on a raw days-to-cover basis, but fee/utilization/lendable are already moving. These sit low on the crowding screen and can be middling on the squeeze leaderboard, so they're easy to miss.</p>
+      <div class="callout-list" id="emergingList"></div>
+    </div>
+
+    <div class="controls">
+      <input type="text" id="search" placeholder="Search ticker or CUSIP">
+      <select id="quadFilter">
+        <option value="">All quadrants</option>
+        <option value="building">Building squeeze</option>
+        <option value="stable">Stable crowded</option>
+        <option value="emerging">Emerging</option>
+        <option value="quiet">Quiet</option>
+        <option value="na">Insufficient data</option>
+      </select>
+      <select id="ratingFilter"><option value="">All ratings</option></select>
+      <span class="count" id="rowCount"></span>
+    </div>
+
+    <div id="tableWrap"><div class="empty">Loading&hellip;</div></div>
+  </div>
+</div>
+
+<footer id="meta"></footer>
+
+<script>
+const DTC_URL = "./markit_dtc.json";
+const SQUEEZE_URL = "./squeeze_screener.json";
+
+const QUAD_COLOR = { building: "var(--rust)", stable: "var(--amber)", emerging: "var(--purple)", quiet: "var(--ink-faint)", na: "var(--ink-faint)" };
+const QUAD_LABEL = { building: "Building squeeze", stable: "Stable crowded", emerging: "Emerging", quiet: "Quiet", na: "Insufficient data" };
+const CROWD_THRESH = 60;
+const MOM_THRESH = 60;
+
+let COMBINED = [];
+
+function avg(vals) {
+  const v = vals.filter(x => x !== null && x !== undefined);
+  if (!v.length) return null;
+  return v.reduce((a, b) => a + b, 0) / v.length;
+}
+
+function classify(crowdPct, momScore) {
+  if (crowdPct === null || crowdPct === undefined) return "na";
+  if (momScore === null || momScore === undefined) return crowdPct >= CROWD_THRESH ? "stable" : "quiet";
+  const highCrowd = crowdPct >= CROWD_THRESH;
+  const highMom = momScore >= MOM_THRESH;
+  if (highCrowd && highMom) return "building";
+  if (highCrowd && !highMom) return "stable";
+  if (!highCrowd && highMom) return "emerging";
+  return "quiet";
+}
+
+function traderRead(row) {
+  const flow = row.trace_flow_label || "";
+  const flowNote = flow === "Client buying"
+    ? " TRACE already shows client buying into it \u2014 likely covering pressure, not fresh conviction."
+    : flow === "Client selling"
+    ? " TRACE shows client selling, which argues against an active squeeze despite the readings."
+    : "";
+  switch (row.quadrant) {
+    case "building":
+      return `Short pressure is actively building.${flowNote} Liquidity on the offer side is likely to keep worsening \u2014 size carefully and expect client RFQs here to skew toward forced covering rather than new conviction.`;
+    case "stable":
+      return `Crowded but not moving.${flowNote} Treat as a standing risk factor rather than an urgent one \u2014 no near-term forced-covering signal yet.`;
+    case "emerging":
+      return `Not yet crowded on raw days-to-cover, but fee/utilization/lendable are tightening.${flowNote} Worth flagging now, before this shows up prominently on the main crowding screen.`;
+    case "quiet":
+      return "No notable crowding or momentum signal at this time.";
+    default:
+      return "Insufficient TRACE match or Markit history to score this bond yet.";
+  }
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return res.json();
+}
+
+function combine(dtcData, sqData) {
+  const sqByCusip = {};
+  (sqData.rows || []).forEach(r => { sqByCusip[r.cusip] = r; });
+
+  return (dtcData.rows || []).filter(r => r.in_h0a0).map(r => {
+    const sq = sqByCusip[r.cusip] || {};
+    const momScore = avg([sq.fee_momentum_score, sq.util_trend_score, sq.lendable_trend_score, sq.flow_score]);
+    const quadrant = classify(r.dtc_pctile_h0a0, momScore);
+    const combined = {
+      cusip: r.cusip,
+      ticker: r.ticker || r.markit_ticker || r.cusip,
+      rating_bucket: r.rating_bucket,
+      sector_l3: r.sector_l3,
+      tenor_bucket: r.tenor_bucket,
+      index_oas: r.index_oas,
+      days_to_cover: r.days_to_cover,
+      dtc_pctile_h0a0: r.dtc_pctile_h0a0,
+      dtc_pctile_rating_peer: r.dtc_pctile_rating_peer,
+      crowding_flag: r.crowding_flag,
+      squeeze_score: sq.squeeze_score !== undefined ? sq.squeeze_score : null,
+      fee_momentum_score: sq.fee_momentum_score !== undefined ? sq.fee_momentum_score : null,
+      util_trend_score: sq.util_trend_score !== undefined ? sq.util_trend_score : null,
+      lendable_trend_score: sq.lendable_trend_score !== undefined ? sq.lendable_trend_score : null,
+      flow_score: sq.flow_score !== undefined ? sq.flow_score : null,
+      trace_flow_label: sq.trace_flow_label || "",
+      momentum_score: momScore,
+      quadrant,
+    };
+    combined.trader_read = traderRead(combined);
+    return combined;
+  });
+}
+
+function fmt(v, d) {
+  if (v === null || v === undefined || v === "") return "\u2014";
+  const n = Number(v);
+  if (Number.isNaN(n)) return String(v);
+  return n.toFixed(d === undefined ? 1 : d);
+}
+
+function renderQuadrant(rows) {
+  const svg = document.getElementById("quadSvg");
+  const pad = 34, size = 320, plot = size - pad - 14;
+  const toX = v => pad + (v / 100) * plot;
+  const toY = v => (size - 14) - (v / 100) * plot;
+  const midX = toX(CROWD_THRESH), midY = toY(MOM_THRESH);
+
+  let svgContent = "";
+  svgContent += `<rect x="${pad}" y="14" width="${plot}" height="${midY-14}" fill="var(--rust-bg)" class="qzone"/>`;
+  svgContent += `<rect x="${midX}" y="14" width="${pad+plot-midX}" height="${midY-14}" fill="var(--rust-bg)" class="qzone" opacity="0"/>`;
+  svgContent = "";
+  svgContent += `<rect x="${midX}" y="14" width="${pad+plot-midX}" height="${midY-14}" fill="#fbeae8" class="qzone"/>`;
+  svgContent += `<rect x="${pad}" y="14" width="${midX-pad}" height="${midY-14}" fill="#f7f8f9" class="qzone"/>`;
+  svgContent += `<rect x="${midX}" y="${midY}" width="${pad+plot-midX}" height="${size-14-midY}" fill="#faf1de" class="qzone"/>`;
+  svgContent += `<rect x="${pad}" y="${midY}" width="${midX-pad}" height="${size-14-midY}" fill="#eeecf6" class="qzone"/>`;
+
+  svgContent += `<line x1="${pad}" y1="${midY}" x2="${pad+plot}" y2="${midY}" stroke="var(--line-strong)" stroke-dasharray="3,3"/>`;
+  svgContent += `<line x1="${midX}" y1="14" x2="${midX}" y2="${size-14}" stroke="var(--line-strong)" stroke-dasharray="3,3"/>`;
+  svgContent += `<line x1="${pad}" y1="${size-14}" x2="${pad+plot}" y2="${size-14}" stroke="var(--line-strong)"/>`;
+  svgContent += `<line x1="${pad}" y1="14" x2="${pad}" y2="${size-14}" stroke="var(--line-strong)"/>`;
+
+  svgContent += `<text class="axis-label" x="${pad+plot}" y="${size-3}" text-anchor="end">Crowding pctile &rarr;</text>`;
+  svgContent += `<text class="axis-label" x="${pad-6}" y="20" text-anchor="start">&uarr; Momentum</text>`;
+
+  rows.forEach(r => {
+    if (r.dtc_pctile_h0a0 === null || r.dtc_pctile_h0a0 === undefined) return;
+    const x = toX(r.dtc_pctile_h0a0);
+    const y = toY(r.momentum_score === null || r.momentum_score === undefined ? 50 : r.momentum_score);
+    const color = QUAD_COLOR[r.quadrant] || "var(--ink-faint)";
+    svgContent += `<circle class="qpoint" data-cusip="${r.cusip}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${color}"><title>${r.ticker} (${r.cusip}) \u2014 ${QUAD_LABEL[r.quadrant]}</title></circle>`;
+  });
+
+  svg.innerHTML = svgContent;
+  svg.querySelectorAll(".qpoint").forEach(pt => {
+    pt.addEventListener("click", () => {
+      document.getElementById("search").value = pt.dataset.cusip;
+      applyFiltersAndRender();
+      document.getElementById("tableWrap").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+}
+
+function renderStatCards(rows) {
+  const counts = { building: 0, stable: 0, emerging: 0, quiet: 0, na: 0 };
+  rows.forEach(r => counts[r.quadrant]++);
+  const cards = [
+    { k: "building", l: "Building squeeze" },
+    { k: "stable", l: "Stable crowded" },
+    { k: "emerging", l: "Emerging" },
+    { k: "quiet", l: "Quiet" },
+  ];
+  document.getElementById("statCards").innerHTML = cards.map(c =>
+    `<div class="stat-card ${c.k === 'emerging' ? 'emerging' : ''}"><div class="n">${counts[c.k]}</div><div class="l">${c.l}</div></div>`
+  ).join("");
+}
+
+function renderEmergingCallout(rows) {
+  const emerging = rows.filter(r => r.quadrant === "emerging")
+    .sort((a, b) => (b.momentum_score || 0) - (a.momentum_score || 0))
+    .slice(0, 12);
+  const list = document.getElementById("emergingList");
+  if (!emerging.length) {
+    list.innerHTML = '<span class="callout-empty">None right now.</span>';
+    return;
+  }
+  list.innerHTML = emerging.map(r =>
+    `<span class="callout-chip" data-cusip="${r.cusip}">${r.ticker}</span>`
+  ).join("");
+  list.querySelectorAll(".callout-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      document.getElementById("search").value = chip.dataset.cusip;
+      applyFiltersAndRender();
+      document.getElementById("tableWrap").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+}
+
+let sortKey = "momentum_score", sortDir = -1;
+
+const COLS = [
+  { key: "ticker", label: "Ticker" },
+  { key: "rating_bucket", label: "Rtg" },
+  { key: "sector_l3", label: "Sector" },
+  { key: "days_to_cover", label: "DTC", num: true },
+  { key: "dtc_pctile_h0a0", label: "Crowd pctile", num: true },
+  { key: "dtc_pctile_rating_peer", label: "Peer pctile", num: true },
+  { key: "momentum_score", label: "Momentum", num: true },
+  { key: "squeeze_score", label: "Squeeze", num: true },
+  { key: "quadrant", label: "Read" },
+];
+
+function renderTable(rows) {
+  const wrap = document.getElementById("tableWrap");
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="empty">No bonds match the current filters.</div>';
+    document.getElementById("rowCount").textContent = "";
+    return;
+  }
+  let html = "<table><thead><tr>";
+  COLS.forEach(c => {
+    const arrow = sortKey === c.key ? (sortDir === 1 ? "\u2191" : "\u2193") : "";
+    html += `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label}${arrow}</th>`;
+  });
+  html += "</tr></thead><tbody>";
+
+  rows.forEach((r, i) => {
+    html += `<tr class="rowline" data-idx="${i}">`;
+    html += `<td class="name">${r.ticker}<div class="cusip">${r.cusip}</div></td>`;
+    html += `<td>${r.rating_bucket || ""}</td>`;
+    html += `<td>${r.sector_l3 || ""}</td>`;
+    html += `<td class="num mono">${fmt(r.days_to_cover, 1)}</td>`;
+    html += `<td class="num mono">${fmt(r.dtc_pctile_h0a0, 0)}</td>`;
+    html += `<td class="num mono">${fmt(r.dtc_pctile_rating_peer, 0)}</td>`;
+    html += `<td class="num mono">${fmt(r.momentum_score, 0)}</td>`;
+    html += `<td class="num mono">${fmt(r.squeeze_score, 0)}</td>`;
+    html += `<td><span class="qtag ${r.quadrant}">${QUAD_LABEL[r.quadrant]}</span></td>`;
+    html += "</tr>";
+    html += `<tr class="read-row" data-idx="${i}"><td class="read-cell" colspan="${COLS.length}">
+      <div class="read-box"><b>${r.ticker}</b> &mdash; ${r.trader_read}
+        <div class="read-meta">
+          <span>Sector: ${r.sector_l3 || "\u2014"}</span>
+          <span>Tenor: ${r.tenor_bucket || "\u2014"}</span>
+          <span>Index OAS: ${r.index_oas || "\u2014"}</span>
+          <span>Flow: ${r.trace_flow_label || "\u2014"}</span>
+        </div>
+      </div></td></tr>`;
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+  document.getElementById("rowCount").textContent = `${rows.length} bond${rows.length === 1 ? "" : "s"}`;
+
+  wrap.querySelectorAll("tr.rowline").forEach(tr => {
+    tr.addEventListener("click", () => {
+      const idx = tr.dataset.idx;
+      wrap.querySelector(`tr.read-row[data-idx="${idx}"]`).classList.toggle("open");
+    });
+  });
+  wrap.querySelectorAll("th").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = -1; }
+      applyFiltersAndRender();
+    });
+  });
+}
+
+function applyFiltersAndRender() {
+  const q = document.getElementById("search").value.trim().toUpperCase();
+  const quadSel = document.getElementById("quadFilter").value;
+  const ratingSel = document.getElementById("ratingFilter").value;
+
+  let rows = COMBINED.filter(r => {
+    if (q && !((r.ticker || "").toUpperCase().includes(q) || (r.cusip || "").toUpperCase().includes(q))) return false;
+    if (quadSel && r.quadrant !== quadSel) return false;
+    if (ratingSel && r.rating_bucket !== ratingSel) return false;
+    return true;
+  });
+
+  rows.sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (sortKey === "quadrant") { av = QUAD_LABEL[av] || ""; bv = QUAD_LABEL[bv] || ""; }
+    if (av === null || av === undefined || av === "") av = sortDir === 1 ? Infinity : -Infinity;
+    if (bv === null || bv === undefined || bv === "") bv = sortDir === 1 ? Infinity : -Infinity;
+    if (typeof av === "string" || typeof bv === "string") return sortDir * String(av).localeCompare(String(bv));
+    return sortDir * (av - bv);
+  });
+
+  renderTable(rows);
+  renderQuadrant(rows);
+}
+
+function populateRatingFilter(rows) {
+  const sel = document.getElementById("ratingFilter");
+  const buckets = [...new Set(rows.map(r => r.rating_bucket).filter(Boolean))].sort();
+  buckets.forEach(b => {
+    const opt = document.createElement("option");
+    opt.value = b; opt.textContent = b;
+    sel.appendChild(opt);
+  });
+}
+
+async function init() {
+  try {
+    const [dtcData, sqData] = await Promise.all([fetchJson(DTC_URL), fetchJson(SQUEEZE_URL)]);
+    COMBINED = combine(dtcData, sqData);
+
+    renderStatCards(COMBINED);
+    renderEmergingCallout(COMBINED);
+    populateRatingFilter(COMBINED);
+    applyFiltersAndRender();
+
+    const dm = dtcData.meta || {}, sm = sqData.meta || {};
+    document.getElementById("meta").textContent =
+      `DTC generated ${dm.generated_at || "\u2014"} \u00b7 squeeze generated ${sm.generated_at || "\u2014"} \u00b7 ${COMBINED.length} bond(s) combined \u00b7 quadrant thresholds: crowd \u2265${CROWD_THRESH}, momentum \u2265${MOM_THRESH}`;
+  } catch (err) {
+    document.getElementById("tableWrap").innerHTML =
+      `<div class="fetch-error">Could not load data (${err.message}). ` +
+      `Make sure both <code>markit_dtc.json</code> and <code>squeeze_screener.json</code> are uploaded to this same Neocities folder.</div>`;
+    document.getElementById("statCards").innerHTML = "";
+    document.getElementById("emergingList").innerHTML = '<span class="callout-empty">Data not loaded.</span>';
+  }
+}
+
+document.getElementById("search").addEventListener("input", applyFiltersAndRender);
+document.getElementById("quadFilter").addEventListener("change", applyFiltersAndRender);
+document.getElementById("ratingFilter").addEventListener("change", applyFiltersAndRender);
+
+init();
+</script>
+
+</body>
+</html>
