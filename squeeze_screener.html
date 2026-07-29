@@ -13,12 +13,9 @@
   Neither Python script changes -- this page only joins their outputs by
   CUSIP and adds a crowding-vs-momentum quadrant read on top.
 
-  Why a quadrant: DTC (crowding) and the squeeze momentum components answer
-  different questions. A bond can be highly crowded with nothing changing
-  (stable risk), or not yet crowded but tightening fast (an early read that
-  doesn't top either tool's own leaderboard by itself). Plotting both axes
-  together surfaces that "emerging" case explicitly instead of leaving it
-  buried in a single blended number.
+  v2: dot plot moved to a full-width hero position, bond tables split into
+  three rating-bucket sections (BB / B / CCC & below) below it, hover
+  tooltips + size-by-squeeze-score + click-to-jump added for interactivity.
 -->
 <style>
   :root{
@@ -41,36 +38,47 @@
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);font-family:var(--sans);}
-  body{font-size:13px;line-height:1.5;padding:28px 32px 64px;max-width:1280px;margin:0 auto;}
+  body{font-size:13px;line-height:1.5;padding:28px 32px 72px;max-width:1180px;margin:0 auto;}
 
-  header{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:20px;}
+  header{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:22px;}
   .eyebrow{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px;}
   h1{font-size:22px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em;}
   .sub{color:var(--ink-soft);font-size:13px;margin:0;}
   .lag-note{display:inline-flex;align-items:center;gap:6px;margin-top:10px;font-size:11.5px;color:var(--amber);background:var(--amber-bg);border:1px solid #efdcae;padding:4px 10px;border-radius:3px;}
 
-  .layout{display:grid;grid-template-columns:400px 1fr;gap:24px;margin:20px 0;align-items:start;}
-  @media (max-width: 900px){ .layout{grid-template-columns:1fr;} }
-
-  .quad-panel{border:1px solid var(--line);border-radius:6px;padding:14px;}
-  .quad-title{font-size:12px;font-weight:600;margin:0 0 4px;}
-  .quad-sub{font-size:11px;color:var(--ink-faint);margin:0 0 10px;}
+  /* ---- hero chart ---- */
+  .hero{border:1px solid var(--line);border-radius:8px;padding:18px 20px 8px;}
+  .hero-head{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px;}
+  .hero-title{font-size:15px;font-weight:600;margin:0;}
+  .hero-sub{font-size:11.5px;color:var(--ink-faint);margin:0;}
+  .chart-wrap{position:relative;}
   svg{width:100%;height:auto;display:block;}
-  .axis-label{font-size:9.5px;fill:var(--ink-faint);font-family:var(--sans);}
-  .qzone{opacity:.55;}
-  .qpoint{cursor:pointer;stroke:var(--paper);stroke-width:1.2;}
-  .qpoint:hover{stroke:var(--ink);stroke-width:1.6;}
+  .axis-tick{font-size:10px;fill:var(--ink-faint);font-family:var(--sans);}
+  .axis-title{font-size:11px;fill:var(--ink-soft);font-family:var(--sans);}
+  .dot-label{font-size:10.5px;font-weight:600;fill:var(--ink);font-family:var(--sans);pointer-events:none;}
+  .qpoint{cursor:pointer;stroke:var(--paper);stroke-width:1.3;transition:r .1s;}
+  .qpoint:hover{stroke:var(--ink);stroke-width:2;}
 
-  .qlegend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
-  .qlegend-item{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--ink-soft);}
-  .qdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  .chart-tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .08s;background:var(--ink);color:#fff;padding:9px 11px;border-radius:5px;font-size:11.5px;max-width:230px;z-index:80;box-shadow:0 6px 18px rgba(0,0,0,.22);}
+  .chart-tip.show{opacity:1;}
+  .tip-name{font-weight:600;font-size:12.5px;}
+  .tip-cusip{font-family:var(--mono);font-size:10px;color:#c7cad1;margin-left:5px;}
+  .tip-tag{margin-top:4px;display:flex;align-items:center;gap:6px;}
+  .tip-row{margin-top:5px;color:#dfe1e6;font-family:var(--mono);font-size:10.5px;}
+  .tip-read{margin-top:6px;color:#eceef1;font-size:11px;line-height:1.4;}
 
-  .stat-cards{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;}
-  .stat-card{border:1px solid var(--line);border-radius:4px;padding:9px 10px;}
-  .stat-card .n{font-family:var(--mono);font-size:17px;font-weight:600;}
-  .stat-card .l{font-size:10px;color:var(--ink-faint);margin-top:1px;}
+  .qlegend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 2px 4px;}
+  .qlegend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-soft);}
+  .qdot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+
+  /* ---- stats strip ---- */
+  .strip{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0;}
+  .stat-card{flex:1;min-width:110px;border:1px solid var(--line);border-radius:5px;padding:10px 12px;}
+  .stat-card .n{font-family:var(--mono);font-size:19px;font-weight:600;}
+  .stat-card .l{font-size:10.5px;color:var(--ink-faint);margin-top:1px;}
   .stat-card.emerging{border-color:var(--purple);background:var(--purple-bg);}
   .stat-card.emerging .n, .stat-card.emerging .l{color:var(--purple);}
+  .other-note{font-size:11px;color:var(--ink-faint);margin:-8px 0 18px;}
 
   .callout{border:1px solid var(--purple);background:var(--purple-bg);border-radius:6px;padding:12px 14px;margin-bottom:18px;}
   .callout h2{font-size:12.5px;font-weight:600;margin:0 0 3px;color:var(--purple);}
@@ -80,21 +88,33 @@
   .callout-chip:hover{background:var(--purple);color:var(--paper);}
   .callout-empty{font-size:11.5px;color:var(--purple);opacity:.7;}
 
-  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:22px 0 10px;}
+  /* ---- controls ---- */
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:6px 0 20px;}
   .controls input[type=text]{font-family:var(--sans);font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:3px;width:220px;}
   .controls select{font-family:var(--sans);font-size:13px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:3px;background:var(--paper);color:var(--ink);}
   .controls .count{margin-left:auto;font-size:12px;color:var(--ink-faint);}
 
-  table{width:100%;border-collapse:collapse;font-size:12px;}
-  thead th{text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);border-bottom:1px solid var(--line-strong);padding:7px 8px;cursor:pointer;white-space:nowrap;}
+  /* ---- rating sections ---- */
+  .rating-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;}
+  @media (max-width: 980px){ .rating-grid{grid-template-columns:1fr;} }
+  .rating-section{border:1px solid var(--line);border-radius:7px;overflow:hidden;}
+  .rating-head{padding:11px 14px;background:var(--panel);border-bottom:1px solid var(--line);}
+  .rating-head .rt{font-size:14px;font-weight:700;}
+  .rating-head .rt-sub{font-size:10.5px;color:var(--ink-faint);margin-top:2px;}
+  .rating-body{max-height:520px;overflow-y:auto;}
+
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  thead th{text-align:left;font-weight:600;font-size:9.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);border-bottom:1px solid var(--line-strong);padding:7px 8px;cursor:pointer;white-space:nowrap;position:sticky;top:0;background:var(--paper);}
   thead th:hover{color:var(--ink);}
   thead th.num,td.num{text-align:right;}
-  tbody td{padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  tbody td{padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;}
   tbody tr.rowline:hover{background:var(--panel);}
   tbody tr.rowline{cursor:pointer;}
+  tbody tr.rowline.flash{animation:flashRow 1.4s ease;}
+  @keyframes flashRow{ 0%{background:var(--purple-bg);} 100%{background:transparent;} }
   td.mono{font-family:var(--mono);}
   td.name{font-weight:600;}
-  td.cusip{color:var(--ink-faint);font-family:var(--mono);font-size:11px;}
+  td.cusip{color:var(--ink-faint);font-family:var(--mono);font-size:10.5px;}
 
   .qtag{display:inline-block;font-size:9.5px;font-weight:600;padding:2px 6px;border-radius:2px;white-space:nowrap;}
   .qtag.building{background:var(--rust-bg);color:var(--rust);}
@@ -105,16 +125,16 @@
 
   .read-row{display:none;}
   .read-row.open{display:table-row;}
-  .read-cell{padding:0 8px 14px !important;border-bottom:1px solid var(--line);background:var(--panel);}
-  .read-box{padding:10px 12px;font-size:12px;color:var(--ink);}
+  .read-cell{padding:0 8px 12px !important;border-bottom:1px solid var(--line);background:var(--panel);}
+  .read-box{padding:8px 10px;font-size:11.5px;color:var(--ink);}
   .read-box b{font-weight:600;}
-  .read-meta{margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--ink-soft);}
+  .read-meta{margin-top:7px;display:flex;gap:12px;flex-wrap:wrap;font-size:10.5px;color:var(--ink-soft);}
 
-  .empty{padding:40px 0;text-align:center;color:var(--ink-faint);font-size:13px;}
+  .empty{padding:30px 0;text-align:center;color:var(--ink-faint);font-size:12.5px;}
   .fetch-error{padding:16px;border:1px solid var(--rust);background:var(--rust-bg);color:var(--rust);border-radius:3px;font-size:12.5px;margin:20px 0;}
   .fetch-error code{font-family:var(--mono);background:rgba(0,0,0,.05);padding:1px 5px;border-radius:2px;}
 
-  footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--ink-faint);}
+  footer{margin-top:28px;padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--ink-faint);}
 </style>
 </head>
 <body>
@@ -126,44 +146,46 @@
   <span class="lag-note">Markit data typically lags TRACE by 2&ndash;3 days &mdash; treat as a positioning read, not a same-day signal.</span>
 </header>
 
-<div class="layout">
-  <div class="quad-panel">
-    <p class="quad-title">Crowding vs momentum</p>
-    <p class="quad-sub">Each dot is a bond. Position = current crowding (x) vs how fast that's changing (y).</p>
-    <svg id="quadSvg" viewBox="0 0 380 320"></svg>
-    <div class="qlegend">
-      <div class="qlegend-item"><span class="qdot" style="background:var(--rust)"></span>Building squeeze</div>
-      <div class="qlegend-item"><span class="qdot" style="background:var(--amber)"></span>Stable crowded</div>
-      <div class="qlegend-item"><span class="qdot" style="background:var(--purple)"></span>Emerging</div>
-      <div class="qlegend-item"><span class="qdot" style="background:var(--ink-faint)"></span>Quiet</div>
-    </div>
-    <div class="stat-cards" id="statCards"></div>
+<div class="hero">
+  <div class="hero-head">
+    <p class="hero-title">Crowding vs momentum</p>
+    <p class="hero-sub">Each dot is a bond &middot; size = squeeze score &middot; hover for detail, click to jump to it below</p>
   </div>
-
-  <div>
-    <div class="callout" id="emergingCallout">
-      <h2>Emerging &mdash; worth a look before it shows up elsewhere</h2>
-      <p>Not yet crowded on a raw days-to-cover basis, but fee/utilization/lendable are already moving. These sit low on the crowding screen and can be middling on the squeeze leaderboard, so they're easy to miss.</p>
-      <div class="callout-list" id="emergingList"></div>
-    </div>
-
-    <div class="controls">
-      <input type="text" id="search" placeholder="Search ticker or CUSIP">
-      <select id="quadFilter">
-        <option value="">All quadrants</option>
-        <option value="building">Building squeeze</option>
-        <option value="stable">Stable crowded</option>
-        <option value="emerging">Emerging</option>
-        <option value="quiet">Quiet</option>
-        <option value="na">Insufficient data</option>
-      </select>
-      <select id="ratingFilter"><option value="">All ratings</option></select>
-      <span class="count" id="rowCount"></span>
-    </div>
-
-    <div id="tableWrap"><div class="empty">Loading&hellip;</div></div>
+  <div class="chart-wrap">
+    <svg id="quadSvg" viewBox="0 0 900 460"></svg>
+  </div>
+  <div class="qlegend">
+    <div class="qlegend-item"><span class="qdot" style="background:var(--rust)"></span>Building squeeze</div>
+    <div class="qlegend-item"><span class="qdot" style="background:var(--amber)"></span>Stable crowded</div>
+    <div class="qlegend-item"><span class="qdot" style="background:var(--purple)"></span>Emerging</div>
+    <div class="qlegend-item"><span class="qdot" style="background:var(--ink-faint)"></span>Quiet</div>
   </div>
 </div>
+
+<div class="strip" id="statCards"></div>
+<p class="other-note" id="otherNote"></p>
+
+<div class="callout" id="emergingCallout">
+  <h2>Emerging &mdash; worth a look before it shows up elsewhere</h2>
+  <p>Not yet crowded on a raw days-to-cover basis, but fee/utilization/lendable are already moving. Easy to miss in either tool alone.</p>
+  <div class="callout-list" id="emergingList"></div>
+</div>
+
+<div class="controls">
+  <input type="text" id="search" placeholder="Search ticker or CUSIP">
+  <select id="quadFilter">
+    <option value="">All quadrants</option>
+    <option value="building">Building squeeze</option>
+    <option value="stable">Stable crowded</option>
+    <option value="emerging">Emerging</option>
+    <option value="quiet">Quiet</option>
+  </select>
+  <span class="count" id="rowCount"></span>
+</div>
+
+<div class="rating-grid" id="ratingGrid"></div>
+
+<div class="chart-tip" id="chartTip"></div>
 
 <footer id="meta"></footer>
 
@@ -176,7 +198,15 @@ const QUAD_LABEL = { building: "Building squeeze", stable: "Stable crowded", eme
 const CROWD_THRESH = 60;
 const MOM_THRESH = 60;
 
+const RATING_SECTIONS = [
+  { key: "BB", label: "BB", sub: "Highest-rated tier of the HY universe on file" },
+  { key: "B", label: "B", sub: "Core of the HY universe on file" },
+  { key: "CCC_or_Lower", label: "CCC & below", sub: "Most distressed tier on file" },
+];
+
 let COMBINED = [];
+const SECTION_SORT = {};
+RATING_SECTIONS.forEach(sec => { SECTION_SORT[sec.key] = { key: "squeeze_score", dir: -1 }; });
 
 function avg(vals) {
   const v = vals.filter(x => x !== null && x !== undefined);
@@ -262,51 +292,93 @@ function fmt(v, d) {
   return n.toFixed(d === undefined ? 1 : d);
 }
 
-function renderQuadrant(rows) {
+// ---- hero chart ----
+function tooltipHtml(r) {
+  return `<div class="tip-name">${r.ticker}<span class="tip-cusip">${r.cusip}</span></div>
+    <div class="tip-tag"><span class="qtag ${r.quadrant}">${QUAD_LABEL[r.quadrant]}</span> ${r.rating_bucket || ""}</div>
+    <div class="tip-row">DTC ${fmt(r.days_to_cover, 1)}d &middot; crowd ${fmt(r.dtc_pctile_h0a0, 0)} &middot; mom ${fmt(r.momentum_score, 0)} &middot; squeeze ${fmt(r.squeeze_score, 0)}</div>
+    <div class="tip-read">${r.trader_read}</div>`;
+}
+
+function jumpToBond(row) {
+  const rowEl = document.querySelector(`tr.rowline[data-cusip="${row.cusip}"]`);
+  if (!rowEl) return;
+  rowEl.scrollIntoView({ behavior: "smooth", block: "center" });
+  rowEl.classList.remove("flash"); void rowEl.offsetWidth; rowEl.classList.add("flash");
+  const idx = rowEl.dataset.idx, sectionKey = rowEl.dataset.section;
+  const detail = document.querySelector(`tr.read-row[data-idx="${idx}"][data-section="${sectionKey}"]`);
+  if (detail) detail.classList.add("open");
+}
+
+function renderHeroChart(rows) {
   const svg = document.getElementById("quadSvg");
-  const pad = 34, size = 320, plot = size - pad - 14;
-  const toX = v => pad + (v / 100) * plot;
-  const toY = v => (size - 14) - (v / 100) * plot;
+  const padL = 60, padR = 30, padT = 20, padB = 50, W = 900, H = 460;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const toX = v => padL + (v / 100) * plotW;
+  const toY = v => (H - padB) - (v / 100) * plotH;
   const midX = toX(CROWD_THRESH), midY = toY(MOM_THRESH);
 
-  let svgContent = "";
-  svgContent += `<rect x="${pad}" y="14" width="${plot}" height="${midY-14}" fill="var(--rust-bg)" class="qzone"/>`;
-  svgContent += `<rect x="${midX}" y="14" width="${pad+plot-midX}" height="${midY-14}" fill="var(--rust-bg)" class="qzone" opacity="0"/>`;
-  svgContent = "";
-  svgContent += `<rect x="${midX}" y="14" width="${pad+plot-midX}" height="${midY-14}" fill="#fbeae8" class="qzone"/>`;
-  svgContent += `<rect x="${pad}" y="14" width="${midX-pad}" height="${midY-14}" fill="#f7f8f9" class="qzone"/>`;
-  svgContent += `<rect x="${midX}" y="${midY}" width="${pad+plot-midX}" height="${size-14-midY}" fill="#faf1de" class="qzone"/>`;
-  svgContent += `<rect x="${pad}" y="${midY}" width="${midX-pad}" height="${size-14-midY}" fill="#eeecf6" class="qzone"/>`;
+  let s = "";
+  s += `<rect x="${midX}" y="${padT}" width="${padL + plotW - midX}" height="${midY - padT}" fill="#fbeae8"/>`;
+  s += `<rect x="${padL}" y="${padT}" width="${midX - padL}" height="${midY - padT}" fill="#eeecf6"/>`;
+  s += `<rect x="${midX}" y="${midY}" width="${padL + plotW - midX}" height="${H - padB - midY}" fill="#faf1de"/>`;
+  s += `<rect x="${padL}" y="${midY}" width="${midX - padL}" height="${H - padB - midY}" fill="#f7f8f9"/>`;
 
-  svgContent += `<line x1="${pad}" y1="${midY}" x2="${pad+plot}" y2="${midY}" stroke="var(--line-strong)" stroke-dasharray="3,3"/>`;
-  svgContent += `<line x1="${midX}" y1="14" x2="${midX}" y2="${size-14}" stroke="var(--line-strong)" stroke-dasharray="3,3"/>`;
-  svgContent += `<line x1="${pad}" y1="${size-14}" x2="${pad+plot}" y2="${size-14}" stroke="var(--line-strong)"/>`;
-  svgContent += `<line x1="${pad}" y1="14" x2="${pad}" y2="${size-14}" stroke="var(--line-strong)"/>`;
-
-  svgContent += `<text class="axis-label" x="${pad+plot}" y="${size-3}" text-anchor="end">Crowding pctile &rarr;</text>`;
-  svgContent += `<text class="axis-label" x="${pad-6}" y="20" text-anchor="start">&uarr; Momentum</text>`;
-
-  rows.forEach(r => {
-    if (r.dtc_pctile_h0a0 === null || r.dtc_pctile_h0a0 === undefined) return;
-    const x = toX(r.dtc_pctile_h0a0);
-    const y = toY(r.momentum_score === null || r.momentum_score === undefined ? 50 : r.momentum_score);
-    const color = QUAD_COLOR[r.quadrant] || "var(--ink-faint)";
-    svgContent += `<circle class="qpoint" data-cusip="${r.cusip}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${color}"><title>${r.ticker} (${r.cusip}) \u2014 ${QUAD_LABEL[r.quadrant]}</title></circle>`;
+  [0, 20, 40, 60, 80, 100].forEach(t => {
+    const x = toX(t), y = toY(t);
+    s += `<line x1="${x}" y1="${padT}" x2="${x}" y2="${H - padB}" stroke="#eef0f2" stroke-width="1"/>`;
+    s += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="#eef0f2" stroke-width="1"/>`;
+    s += `<text class="axis-tick" x="${x}" y="${H - padB + 16}" text-anchor="middle">${t}</text>`;
+    s += `<text class="axis-tick" x="${padL - 8}" y="${y + 3}" text-anchor="end">${t}</text>`;
   });
 
-  svg.innerHTML = svgContent;
+  s += `<line x1="${midX}" y1="${padT}" x2="${midX}" y2="${H - padB}" stroke="var(--line-strong)" stroke-dasharray="4,3"/>`;
+  s += `<line x1="${padL}" y1="${midY}" x2="${W - padR}" y2="${midY}" stroke="var(--line-strong)" stroke-dasharray="4,3"/>`;
+  s += `<line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="var(--line-strong)"/>`;
+  s += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}" stroke="var(--line-strong)"/>`;
+
+  s += `<text class="axis-title" x="${padL + plotW / 2}" y="${H - 8}" text-anchor="middle">Crowding percentile (days-to-cover vs H0A0) &rarr;</text>`;
+  s += `<text class="axis-title" transform="translate(16,${padT + plotH / 2}) rotate(-90)" text-anchor="middle">Momentum &rarr;</text>`;
+
+  const plotted = rows.filter(r => r.dtc_pctile_h0a0 !== null && r.dtc_pctile_h0a0 !== undefined);
+  const labeledSet = new Set(
+    [...plotted].filter(r => r.squeeze_score !== null && r.squeeze_score !== undefined)
+      .sort((a, b) => b.squeeze_score - a.squeeze_score).slice(0, 8).map(r => r.cusip)
+  );
+
+  plotted.forEach(r => {
+    const x = toX(r.dtc_pctile_h0a0);
+    const momV = r.momentum_score === null || r.momentum_score === undefined ? 50 : r.momentum_score;
+    const y = toY(momV);
+    const radius = r.squeeze_score !== null && r.squeeze_score !== undefined ? (4 + (r.squeeze_score / 100) * 9) : 4;
+    const color = QUAD_COLOR[r.quadrant] || "var(--ink-faint)";
+    s += `<circle class="qpoint" data-cusip="${r.cusip}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${radius.toFixed(1)}" fill="${color}"/>`;
+    if (labeledSet.has(r.cusip)) {
+      s += `<text class="dot-label" x="${x.toFixed(1)}" y="${(y - radius - 4).toFixed(1)}" text-anchor="middle">${r.ticker}</text>`;
+    }
+  });
+
+  svg.innerHTML = s;
+
+  const tip = document.getElementById("chartTip");
   svg.querySelectorAll(".qpoint").forEach(pt => {
-    pt.addEventListener("click", () => {
-      document.getElementById("search").value = pt.dataset.cusip;
-      applyFiltersAndRender();
-      document.getElementById("tableWrap").scrollIntoView({ behavior: "smooth", block: "start" });
+    const row = plotted.find(r => r.cusip === pt.dataset.cusip);
+    if (!row) return;
+    pt.addEventListener("mousemove", e => {
+      tip.innerHTML = tooltipHtml(row);
+      tip.style.left = (e.clientX + 16) + "px";
+      tip.style.top = (e.clientY + 16) + "px";
+      tip.classList.add("show");
     });
+    pt.addEventListener("mouseleave", () => tip.classList.remove("show"));
+    pt.addEventListener("click", () => jumpToBond(row));
   });
 }
 
-function renderStatCards(rows) {
-  const counts = { building: 0, stable: 0, emerging: 0, quiet: 0, na: 0 };
-  rows.forEach(r => counts[r.quadrant]++);
+// ---- stats / callout ----
+function renderStatsAndEmerging(rows, otherCount) {
+  const counts = { building: 0, stable: 0, emerging: 0, quiet: 0 };
+  rows.forEach(r => { if (counts[r.quadrant] !== undefined) counts[r.quadrant]++; });
   const cards = [
     { k: "building", l: "Building squeeze" },
     { k: "stable", l: "Stable crowded" },
@@ -316,93 +388,110 @@ function renderStatCards(rows) {
   document.getElementById("statCards").innerHTML = cards.map(c =>
     `<div class="stat-card ${c.k === 'emerging' ? 'emerging' : ''}"><div class="n">${counts[c.k]}</div><div class="l">${c.l}</div></div>`
   ).join("");
-}
 
-function renderEmergingCallout(rows) {
+  document.getElementById("otherNote").textContent = otherCount > 0
+    ? `${otherCount} bond${otherCount === 1 ? "" : "s"} rated outside BB/B/CCC (crossover or unrated) are on file but not shown in the sections below.`
+    : "";
+
   const emerging = rows.filter(r => r.quadrant === "emerging")
     .sort((a, b) => (b.momentum_score || 0) - (a.momentum_score || 0))
     .slice(0, 12);
   const list = document.getElementById("emergingList");
   if (!emerging.length) {
     list.innerHTML = '<span class="callout-empty">None right now.</span>';
-    return;
-  }
-  list.innerHTML = emerging.map(r =>
-    `<span class="callout-chip" data-cusip="${r.cusip}">${r.ticker}</span>`
-  ).join("");
-  list.querySelectorAll(".callout-chip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      document.getElementById("search").value = chip.dataset.cusip;
-      applyFiltersAndRender();
-      document.getElementById("tableWrap").scrollIntoView({ behavior: "smooth", block: "start" });
+  } else {
+    list.innerHTML = emerging.map(r => `<span class="callout-chip" data-cusip="${r.cusip}">${r.ticker}</span>`).join("");
+    list.querySelectorAll(".callout-chip").forEach(chip => {
+      chip.addEventListener("click", () => {
+        const row = COMBINED.find(r => r.cusip === chip.dataset.cusip);
+        if (row) jumpToBond(row);
+      });
     });
-  });
+  }
 }
 
-let sortKey = "momentum_score", sortDir = -1;
-
+// ---- rating sections ----
 const COLS = [
   { key: "ticker", label: "Ticker" },
-  { key: "rating_bucket", label: "Rtg" },
   { key: "sector_l3", label: "Sector" },
   { key: "days_to_cover", label: "DTC", num: true },
-  { key: "dtc_pctile_h0a0", label: "Crowd pctile", num: true },
-  { key: "dtc_pctile_rating_peer", label: "Peer pctile", num: true },
-  { key: "momentum_score", label: "Momentum", num: true },
+  { key: "dtc_pctile_h0a0", label: "Crowd", num: true },
+  { key: "momentum_score", label: "Mom", num: true },
   { key: "squeeze_score", label: "Squeeze", num: true },
   { key: "quadrant", label: "Read" },
 ];
 
-function renderTable(rows) {
-  const wrap = document.getElementById("tableWrap");
-  if (!rows.length) {
-    wrap.innerHTML = '<div class="empty">No bonds match the current filters.</div>';
-    document.getElementById("rowCount").textContent = "";
-    return;
+function sortRows(rows, sortState) {
+  const { key, dir } = sortState;
+  const out = [...rows];
+  out.sort((a, b) => {
+    let av = a[key], bv = b[key];
+    if (key === "quadrant") { av = QUAD_LABEL[av] || ""; bv = QUAD_LABEL[bv] || ""; }
+    if (av === null || av === undefined || av === "") av = dir === 1 ? Infinity : -Infinity;
+    if (bv === null || bv === undefined || bv === "") bv = dir === 1 ? Infinity : -Infinity;
+    if (typeof av === "string" || typeof bv === "string") return dir * String(av).localeCompare(String(bv));
+    return dir * (av - bv);
+  });
+  return out;
+}
+
+function renderSection(sec, rows) {
+  const container = document.getElementById(`section-${sec.key}`);
+  const sortState = SECTION_SORT[sec.key];
+  const sorted = sortRows(rows, sortState);
+  const avgSqueeze = avg(rows.map(r => r.squeeze_score));
+
+  let head = `<div class="rating-head">
+    <div class="rt">${sec.label}</div>
+    <div class="rt-sub">${rows.length} bond${rows.length === 1 ? "" : "s"} &middot; ${sec.sub} &middot; avg squeeze ${avgSqueeze !== null ? avgSqueeze.toFixed(0) : "\u2014"}</div>
+  </div>`;
+
+  let body;
+  if (!sorted.length) {
+    body = `<div class="empty">No bonds match the current filters in this tier.</div>`;
+  } else {
+    let html = "<table><thead><tr>";
+    COLS.forEach(c => {
+      const arrow = sortState.key === c.key ? (sortState.dir === 1 ? "\u2191" : "\u2193") : "";
+      html += `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label}${arrow}</th>`;
+    });
+    html += "</tr></thead><tbody>";
+    sorted.forEach((r, i) => {
+      html += `<tr class="rowline" data-idx="${i}" data-section="${sec.key}" data-cusip="${r.cusip}">`;
+      html += `<td class="name">${r.ticker}<div class="cusip">${r.cusip}</div></td>`;
+      html += `<td>${r.sector_l3 || ""}</td>`;
+      html += `<td class="num mono">${fmt(r.days_to_cover, 1)}</td>`;
+      html += `<td class="num mono">${fmt(r.dtc_pctile_h0a0, 0)}</td>`;
+      html += `<td class="num mono">${fmt(r.momentum_score, 0)}</td>`;
+      html += `<td class="num mono">${fmt(r.squeeze_score, 0)}</td>`;
+      html += `<td><span class="qtag ${r.quadrant}">${QUAD_LABEL[r.quadrant]}</span></td>`;
+      html += "</tr>";
+      html += `<tr class="read-row" data-idx="${i}" data-section="${sec.key}"><td class="read-cell" colspan="${COLS.length}">
+        <div class="read-box"><b>${r.ticker}</b> &mdash; ${r.trader_read}
+          <div class="read-meta">
+            <span>Tenor: ${r.tenor_bucket || "\u2014"}</span>
+            <span>Index OAS: ${r.index_oas || "\u2014"}</span>
+            <span>Peer pctile: ${fmt(r.dtc_pctile_rating_peer, 0)}</span>
+            <span>Flow: ${r.trace_flow_label || "\u2014"}</span>
+          </div>
+        </div></td></tr>`;
+    });
+    html += "</tbody></table>";
+    body = html;
   }
-  let html = "<table><thead><tr>";
-  COLS.forEach(c => {
-    const arrow = sortKey === c.key ? (sortDir === 1 ? "\u2191" : "\u2193") : "";
-    html += `<th class="${c.num ? 'num' : ''}" data-key="${c.key}">${c.label}${arrow}</th>`;
-  });
-  html += "</tr></thead><tbody>";
 
-  rows.forEach((r, i) => {
-    html += `<tr class="rowline" data-idx="${i}">`;
-    html += `<td class="name">${r.ticker}<div class="cusip">${r.cusip}</div></td>`;
-    html += `<td>${r.rating_bucket || ""}</td>`;
-    html += `<td>${r.sector_l3 || ""}</td>`;
-    html += `<td class="num mono">${fmt(r.days_to_cover, 1)}</td>`;
-    html += `<td class="num mono">${fmt(r.dtc_pctile_h0a0, 0)}</td>`;
-    html += `<td class="num mono">${fmt(r.dtc_pctile_rating_peer, 0)}</td>`;
-    html += `<td class="num mono">${fmt(r.momentum_score, 0)}</td>`;
-    html += `<td class="num mono">${fmt(r.squeeze_score, 0)}</td>`;
-    html += `<td><span class="qtag ${r.quadrant}">${QUAD_LABEL[r.quadrant]}</span></td>`;
-    html += "</tr>";
-    html += `<tr class="read-row" data-idx="${i}"><td class="read-cell" colspan="${COLS.length}">
-      <div class="read-box"><b>${r.ticker}</b> &mdash; ${r.trader_read}
-        <div class="read-meta">
-          <span>Sector: ${r.sector_l3 || "\u2014"}</span>
-          <span>Tenor: ${r.tenor_bucket || "\u2014"}</span>
-          <span>Index OAS: ${r.index_oas || "\u2014"}</span>
-          <span>Flow: ${r.trace_flow_label || "\u2014"}</span>
-        </div>
-      </div></td></tr>`;
-  });
-  html += "</tbody></table>";
-  wrap.innerHTML = html;
-  document.getElementById("rowCount").textContent = `${rows.length} bond${rows.length === 1 ? "" : "s"}`;
+  container.innerHTML = head + `<div class="rating-body">${body}</div>`;
 
-  wrap.querySelectorAll("tr.rowline").forEach(tr => {
+  container.querySelectorAll("tr.rowline").forEach(tr => {
     tr.addEventListener("click", () => {
       const idx = tr.dataset.idx;
-      wrap.querySelector(`tr.read-row[data-idx="${idx}"]`).classList.toggle("open");
+      container.querySelector(`tr.read-row[data-idx="${idx}"]`).classList.toggle("open");
     });
   });
-  wrap.querySelectorAll("th").forEach(th => {
+  container.querySelectorAll("th").forEach(th => {
     th.addEventListener("click", () => {
       const key = th.dataset.key;
-      if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = -1; }
+      if (sortState.key === key) sortState.dir *= -1; else { sortState.key = key; sortState.dir = -1; }
       applyFiltersAndRender();
     });
   });
@@ -411,54 +500,40 @@ function renderTable(rows) {
 function applyFiltersAndRender() {
   const q = document.getElementById("search").value.trim().toUpperCase();
   const quadSel = document.getElementById("quadFilter").value;
-  const ratingSel = document.getElementById("ratingFilter").value;
 
-  let rows = COMBINED.filter(r => {
+  const filtered = COMBINED.filter(r => {
     if (q && !((r.ticker || "").toUpperCase().includes(q) || (r.cusip || "").toUpperCase().includes(q))) return false;
     if (quadSel && r.quadrant !== quadSel) return false;
-    if (ratingSel && r.rating_bucket !== ratingSel) return false;
     return true;
   });
 
-  rows.sort((a, b) => {
-    let av = a[sortKey], bv = b[sortKey];
-    if (sortKey === "quadrant") { av = QUAD_LABEL[av] || ""; bv = QUAD_LABEL[bv] || ""; }
-    if (av === null || av === undefined || av === "") av = sortDir === 1 ? Infinity : -Infinity;
-    if (bv === null || bv === undefined || bv === "") bv = sortDir === 1 ? Infinity : -Infinity;
-    if (typeof av === "string" || typeof bv === "string") return sortDir * String(av).localeCompare(String(bv));
-    return sortDir * (av - bv);
+  const knownKeys = new Set(RATING_SECTIONS.map(s => s.key));
+  const otherCount = filtered.filter(r => !knownKeys.has(r.rating_bucket)).length;
+
+  renderHeroChart(filtered);
+  renderStatsAndEmerging(filtered, otherCount);
+  RATING_SECTIONS.forEach(sec => {
+    renderSection(sec, filtered.filter(r => r.rating_bucket === sec.key));
   });
 
-  renderTable(rows);
-  renderQuadrant(rows);
-}
-
-function populateRatingFilter(rows) {
-  const sel = document.getElementById("ratingFilter");
-  const buckets = [...new Set(rows.map(r => r.rating_bucket).filter(Boolean))].sort();
-  buckets.forEach(b => {
-    const opt = document.createElement("option");
-    opt.value = b; opt.textContent = b;
-    sel.appendChild(opt);
-  });
+  document.getElementById("rowCount").textContent = `${filtered.length} bond${filtered.length === 1 ? "" : "s"} matched`;
 }
 
 async function init() {
+  const grid = document.getElementById("ratingGrid");
+  grid.innerHTML = RATING_SECTIONS.map(sec => `<div class="rating-section" id="section-${sec.key}"></div>`).join("");
+
   try {
     const [dtcData, sqData] = await Promise.all([fetchJson(DTC_URL), fetchJson(SQUEEZE_URL)]);
     COMBINED = combine(dtcData, sqData);
 
-    renderStatCards(COMBINED);
-    renderEmergingCallout(COMBINED);
-    populateRatingFilter(COMBINED);
     applyFiltersAndRender();
 
     const dm = dtcData.meta || {}, sm = sqData.meta || {};
     document.getElementById("meta").textContent =
       `DTC generated ${dm.generated_at || "\u2014"} \u00b7 squeeze generated ${sm.generated_at || "\u2014"} \u00b7 ${COMBINED.length} bond(s) combined \u00b7 quadrant thresholds: crowd \u2265${CROWD_THRESH}, momentum \u2265${MOM_THRESH}`;
   } catch (err) {
-    document.getElementById("tableWrap").innerHTML =
-      `<div class="fetch-error">Could not load data (${err.message}). ` +
+    grid.innerHTML = `<div class="fetch-error">Could not load data (${err.message}). ` +
       `Make sure both <code>markit_dtc.json</code> and <code>squeeze_screener.json</code> are uploaded to this same Neocities folder.</div>`;
     document.getElementById("statCards").innerHTML = "";
     document.getElementById("emergingList").innerHTML = '<span class="callout-empty">Data not loaded.</span>';
@@ -467,7 +542,6 @@ async function init() {
 
 document.getElementById("search").addEventListener("input", applyFiltersAndRender);
 document.getElementById("quadFilter").addEventListener("change", applyFiltersAndRender);
-document.getElementById("ratingFilter").addEventListener("change", applyFiltersAndRender);
 
 init();
 </script>
