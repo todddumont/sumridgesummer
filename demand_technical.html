@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Credit Demand Technical — TRACE / ICE Constituent Proxy — SMRD</title>
+<!--
+  Standalone SMRD tool. Not part of site.html.
+  Fetches ./demand_technical.json (output of demand_technical_engine.py).
+  Deploy this file alongside that JSON in the same Neocities folder.
+
+
+
+
+
+
+
+
+  METHODOLOGY: this is a TRACE + ICE BofA constituent-history proxy for the
+  "credit demand technical" framework used in sell-side research (net dealer
+  lift, turnover, tenor preference, coupon-vs-supply). It does NOT include
+  EPFR fund flows, TIC foreign demand, new issue concessions, or DTCC
+  CDX/iTraxx positioning -- SMRD has no feed for those. See the on-page
+  caveat banner and demand_technical_engine.py's own header comment.
+-->
+<style>
+  :root{
+    --sans: "Neue Haas Grotesk Display","Bw Haas Grotesk",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+    --mono: Consolas,"SF Mono","Roboto Mono","Courier New",monospace;
+
+
+
+
+
+
+
+
+    --paper:#0a0d11;
+    --panel:#12161c;
+    --panel2:#181e26;
+    --ink:#e7eaee;
+    --ink-soft:#9aa3ad;
+    --ink-faint:#626b75;
+    --line:#232a33;
+    --line-strong:#3a4451;
+
+
+
+
+
+
+
+
+    --green:#3ddc84;   --green-bg:#0f2a1e;
+    --amber:#ffb020;   --amber-bg:#3a2a0d;
+    --rust:#ff6a56;    --rust-bg:#3a1712;
+    --blue:#5aa9ff;    --blue-bg:#122239;
+    --purple:#c39bff;  --purple-bg:#241a3a;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);font-family:var(--sans);}
+  body{font-size:13px;line-height:1.5;padding:24px 32px;max-width:1180px;margin:0 auto;min-height:100vh;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-track{background:var(--panel);}
+  ::-webkit-scrollbar-thumb{background:var(--line-strong);}
+  ::-webkit-scrollbar-thumb:hover{background:var(--ink-faint);}
+
+
+
+
+
+
+
+
+  header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px;}
+  .eyebrow{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);font-family:var(--mono);margin:0 0 6px;}
+  h1{font-size:22px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em;}
+  .sub{color:var(--ink-soft);font-size:13px;margin:0;}
+  .freshness{font-family:var(--mono);font-size:11px;font-weight:600;padding:5px 10px;border:1px solid var(--line-strong);white-space:nowrap;flex-shrink:0;color:var(--ink-faint);background:var(--panel);}
+
+
+
+
+
+
+
+
+  .caveat{display:flex;gap:10px;align-items:flex-start;margin:14px 0;padding:12px 14px;border:1px solid var(--amber);background:var(--amber-bg);}
+  .caveat .mark{font-weight:700;color:var(--amber);font-size:14px;flex-shrink:0;}
+  .caveat p{margin:0;font-size:12px;color:var(--ink);line-height:1.5;}
+  .caveat p b{color:var(--amber);}
+  .caveat code{font-family:var(--mono);background:rgba(255,255,255,.08);padding:1px 5px;}
+
+
+
+
+
+
+
+
+  .overview-line{font-size:12px;color:var(--ink-faint);font-family:var(--mono);margin:0 0 20px;}
+
+
+
+
+
+
+
+
+  .idx-toggle{display:flex;gap:8px;margin:0 0 20px;flex-wrap:wrap;}
+  .idx-toggle button{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:6px 14px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-faint);cursor:pointer;}
+  .idx-toggle button:hover{color:var(--ink-soft);border-color:var(--ink-faint);}
+  .idx-toggle button.active{color:var(--paper);background:var(--amber);border-color:var(--amber);}
+  .cs-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;margin:0 0 10px;padding:10px 12px;border:1px solid var(--line-strong);background:var(--panel);}
+  .cs-filters label{display:flex;flex-direction:column;gap:3px;font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);}
+  .cs-filters input[type="date"],.cs-filters select{font-family:var(--mono);font-size:12px;color:var(--ink);background:var(--panel2);border:1px solid var(--line-strong);padding:5px 7px;}
+  .cs-filters button{align-self:flex-end;font-family:var(--mono);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:6px 12px;border:1px solid var(--line-strong);background:var(--panel2);color:var(--ink-soft);cursor:pointer;}
+  .cs-filters button:hover{color:var(--ink);border-color:var(--ink-faint);}
+
+
+
+
+
+
+
+
+  section{margin-bottom:26px;}
+  .section-head{margin-bottom:8px;}
+  .section-head h2{font-size:14px;margin:0 0 3px;font-weight:700;}
+  .section-sub{font-size:11.5px;color:var(--ink-soft);}
+
+
+
+
+
+
+
+
+  /* ---------- composite cards ---------- */
+  .comp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
+  .comp-card{border:1px solid var(--line-strong);border-left-width:3px;background:var(--panel);padding:14px 16px;}
+  .comp-idx{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--ink);margin-bottom:6px;}
+  .comp-reading{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:2px 8px;margin-bottom:10px;}
+  .comp-pct{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--ink);margin-bottom:2px;}
+  .comp-pct span{font-size:11px;font-weight:400;color:var(--ink-faint);margin-left:4px;}
+  .comp-rows{margin-top:10px;border-top:1px solid var(--line);padding-top:8px;}
+  .comp-rows div{display:flex;justify-content:space-between;font-size:11.5px;padding:2px 0;}
+  .comp-rows span{color:var(--ink-faint);}
+  .comp-rows b{font-family:var(--mono);color:var(--ink-soft);font-weight:600;}
+  .comp-note{margin-top:8px;font-size:10px;color:var(--ink-faint);font-family:var(--mono);}
+  .comp-desc{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:11.5px;line-height:1.55;color:var(--ink-soft);}
+
+
+
+
+
+
+
+
+  /* ---------- charts ---------- */
+  .chart-wrap{border:1px solid var(--line-strong);background:var(--panel);padding:16px 16px 10px;}
+  .chart-svg{width:100%;height:auto;display:block;}
+  .grid-line{stroke:var(--line);stroke-width:1;}
+  .grid-line-strong{stroke:var(--line-strong);stroke-width:1.2;}
+  .axis-label{font-family:var(--mono);font-size:9.5px;fill:var(--ink-faint);}
+  #liftLegend{display:flex;flex-wrap:wrap;gap:14px;padding:10px 2px 2px;font-size:11px;color:var(--ink-soft);}
+  .legend-item{display:flex;align-items:center;gap:5px;}
+  .legend-sw{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+  .lift-bar{cursor:pointer;}
+  .lift-bar:hover{opacity:1 !important;stroke:var(--ink);stroke-width:1;}
+  .turnover-dot{cursor:pointer;}
+  .turnover-dot:hover{stroke:var(--ink);stroke-width:1.5;}
+  .bar-readout{margin-top:8px;padding:8px 12px;border:1px solid var(--line-strong);background:var(--panel2);font-family:var(--mono);font-size:12px;color:var(--ink-faint);}
+  .bar-readout .hl{color:var(--ink);font-weight:600;}
+
+
+
+
+
+
+
+
+  /* ---------- tenor buckets ---------- */
+  .tenor-block{border:1px solid var(--line-strong);background:var(--panel);margin-bottom:12px;}
+  .tenor-idx-label{font-family:var(--mono);font-weight:700;font-size:12px;color:var(--amber);padding:9px 12px;background:var(--panel2);border-bottom:1px solid var(--line);}
+  .tenor-row{display:grid;grid-template-columns:110px 1fr 60px 90px;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);}
+  .tenor-row:last-child{border-bottom:none;}
+  .tenor-label{font-family:var(--mono);font-size:11.5px;color:var(--ink-soft);}
+  .tenor-bar-track{height:8px;background:var(--panel2);position:relative;}
+  .tenor-bar-fill{height:100%;background:var(--blue);}
+  .tenor-share{font-family:var(--mono);font-size:11.5px;text-align:right;color:var(--ink);}
+  .tenor-lift{font-family:var(--mono);font-size:11.5px;text-align:right;}
+  .tenor-lift.pos{color:var(--green);}
+  .tenor-lift.neg{color:var(--rust);}
+
+
+
+
+
+
+
+
+  /* ---------- tables ---------- */
+  table{width:100%;border-collapse:collapse;font-size:11.5px;background:var(--panel);border:1px solid var(--line-strong);}
+  thead th{text-align:left;font-weight:600;font-size:9.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-faint);
+    background:var(--panel2);border-bottom:1px solid var(--line-strong);padding:7px 10px;white-space:nowrap;}
+  thead th.num,td.num{text-align:right;}
+  tbody td{padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--ink-soft);}
+  td.mono{font-family:var(--mono);}
+
+
+
+
+
+
+
+
+  .empty{padding:24px;text-align:center;color:var(--ink-faint);font-size:12.5px;}
+  .fetch-error{padding:16px;border:1px solid var(--rust);background:var(--rust-bg);color:var(--rust);font-size:12.5px;margin:20px 0;}
+  .fetch-error code{font-family:var(--mono);background:rgba(255,255,255,.06);padding:1px 5px;}
+
+
+
+
+
+
+
+
+  footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--ink-faint);font-family:var(--mono);}
+
+
+
+
+
+
+
+
+  @media (max-width:640px){
+    .tenor-row{grid-template-columns:70px 1fr 46px 70px;}
+  }
+</style>
+</head>
+<body>
+
+
+
+
+
+
+
+
+<header>
+  <div>
+    <p class="eyebrow">SMRD &middot; standalone tool</p>
+    <h1>Credit Demand Technical &mdash; TRACE / ICE Constituent Proxy</h1>
+    <p class="sub">Net dealer lift, turnover, tenor-preference skew, and coupon-vs-net-supply coverage, reconstructed from SMRD's own TRACE tape and ICE BofA index constituent history.</p>
+  </div>
+  <span class="freshness" id="freshnessBadge">Loading&hellip;</span>
+</header>
+
+
+
+
+
+
+
+
+<div class="caveat">
+  <span class="mark">!</span>
+  <p><b>TRACE + constituent-history proxy, not a full replication.</b> This tracks net customer demand, turnover, and coupon-reinvestment-vs-net-supply off SMRD's own data. It does <b>not</b> include EPFR fund flows, TIC foreign-purchase data, new issue concession estimates, or DTCC CDX/iTraxx positioning &mdash; SMRD has no feed for those. The rolling TRACE window is short, so the composite reading below is a percentile within the observed weeks (see <code>sample_weeks</code>), not a multi-year z-score. Engine: <code>demand_technical_engine.py</code>.</p>
+</div>
+
+
+
+
+
+
+
+
+<p class="overview-line" id="overviewLine"></p>
+
+
+
+
+
+
+
+
+<div class="idx-toggle" id="idxToggle"></div>
+
+
+
+
+
+
+
+
+<section>
+  <div class="section-head">
+    <h2>Composite demand-technical reading</h2>
+    <p class="section-sub" id="compositeSub">Most recent week's net lift and turnover, ranked against the observed sample.</p>
+  </div>
+  <div class="comp-grid" id="compositeCards"><div class="empty">Loading&hellip;</div></div>
+</section>
+
+
+
+
+
+
+
+
+<section>
+  <div class="section-head">
+    <h2>Net dealer lift (customer buys &minus; sells), weekly</h2>
+    <p class="section-sub">Positive = net customer buying (demand technical supportive). Negative = net customer selling.</p>
+  </div>
+  <div class="chart-wrap">
+    <div id="liftChartContainer"><div class="empty">Loading&hellip;</div></div>
+    <div id="liftLegend"></div>
+    <div id="liftBarReadout" class="bar-readout">Click a bar to see its week.</div>
+  </div>
+</section>
+
+
+
+
+
+
+
+
+<section>
+  <div class="section-head">
+    <h2>Turnover ratio, weekly</h2>
+    <p class="section-sub">Customer trading volume as a % of matched index universe amount outstanding.</p>
+  </div>
+  <div class="chart-wrap">
+    <div id="turnoverChartContainer"><div class="empty">Loading&hellip;</div></div>
+    <div id="turnoverDotReadout" class="bar-readout">Click a point to see its week.</div>
+  </div>
+</section>
+
+
+
+
+
+
+
+
+<section>
+  <div class="section-head">
+    <h2>Tenor-bucket demand preference</h2>
+    <p class="section-sub">Volume share and net lift by Short (&lt;3y) / Intermediate (3&ndash;7y) / Long (7y+) duration bucket.</p>
+  </div>
+  <div id="tenorContainer"><div class="empty">Loading&hellip;</div></div>
+</section>
+
+
+
+
+
+
+
+
+<section id="ratingSection">
+  <div class="section-head">
+    <h2>Rating-cohort net demand</h2>
+    <p class="section-sub">Only shown if a rating column was present in the constituent file.</p>
+  </div>
+  <div id="ratingContainer"><div class="empty">Loading&hellip;</div></div>
+</section>
+
+
+
+
+
+
+
+
+<section>
+  <div class="section-head">
+    <h2>Coupon income vs. net supply</h2>
+    <p class="section-sub">Annualized coupon income implied by the constituent universe vs. period-over-period change in total par outstanding (proxy for net technical supply; for a HY-only index this also nets out fallen-angel/rising-star migration).</p>
+  </div>
+  <div class="cs-filters" id="csFilters">
+    <label>Index
+      <select id="csIndex">
+        <option value="ALL">All</option>
+      </select>
+    </label>
+    <label>From<input type="date" id="csFrom"></label>
+    <label>To<input type="date" id="csTo"></label>
+    <label>Coverage
+      <select id="csCoverage">
+        <option value="ALL">All</option>
+        <option value="COVERED">Covered (&ge;1x)</option>
+        <option value="UNCOVERED">Uncovered (&lt;1x)</option>
+      </select>
+    </label>
+    <button type="button" id="csReset">Reset</button>
+  </div>
+  <div id="couponSupplyContainer"><div class="empty">Loading&hellip;</div></div>
+</section>
+
+
+
+
+
+
+
+
+<footer id="meta"></footer>
+
+
+
+
+
+
+
+
+<script>
+const DATA_URL = "./demand_technical.json";
+const INDEX_COLOR = { H0A0: "var(--amber)", C0A0: "var(--blue)" };
+const FALLBACK_COLORS = ["var(--green)", "var(--rust)", "var(--purple)"];
+const TENOR_ORDER = ["Short", "Intermediate", "Long"];
+
+
+
+
+
+
+
+
+let DATA = null;
+let selectedIndex = "ALL";
+let csIndex = "ALL", csFrom = null, csTo = null, csCoverage = "ALL";
+
+
+
+
+
+
+
+
+function colorFor(idx, i) { return INDEX_COLOR[idx] || FALLBACK_COLORS[i % FALLBACK_COLORS.length]; }
+function fmtMM(v) {
+  if (v === null || v === undefined || isNaN(v)) return "\u2014";
+  const sign = v < 0 ? "-" : "";
+  return `${sign}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}mm`;
+}
+function fmtPct(v, d) {
+  if (v === null || v === undefined || isNaN(v)) return "\u2014";
+  return v.toLocaleString("en-US", { minimumFractionDigits: d ?? 1, maximumFractionDigits: d ?? 1 }) + "%";
+}
+// Plain-English translation of a composite row, so the number is legible without
+// reading the methodology caveat first.
+function compositeDescription(c) {
+  const dir = c.net_lift_mm >= 0 ? "net bought" : "net sold";
+  const backdrop = c.reading === "Supportive" ? "a supportive demand backdrop"
+    : c.reading === "Weak" ? "a soft demand backdrop"
+    : "a mixed/neutral demand backdrop";
+  let cov = "";
+  if (c.coupon_supply_coverage != null) {
+    cov = c.coupon_supply_coverage >= 1
+      ? ` Coupon reinvestment alone covers ${c.coupon_supply_coverage.toFixed(1)}x this period's net new supply.`
+      : ` Coupon reinvestment covers only ${c.coupon_supply_coverage.toFixed(1)}x this period's net new supply \u2014 the rest needs to be absorbed elsewhere.`;
+  }
+  return `Customers ${dir} ${fmtMM(Math.abs(c.net_lift_mm))} the week of ${c.week_ending} on ${fmtPct(c.turnover_pct, 2)} turnover, ranking in the ${c.composite_percentile.toFixed(0)}th percentile of the ${c.sample_weeks}-week sample \u2014 ${backdrop}.${cov}`;
+}
+
+
+
+
+
+
+
+
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+
+
+
+
+
+
+
+function freshnessBadgeHtml(generatedAt) {
+  if (!generatedAt) return "Data timestamp unavailable";
+  const d = new Date(generatedAt);
+  if (isNaN(d.getTime())) return `Generated ${generatedAt}`;
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) + " UTC";
+}
+
+
+
+
+
+
+
+
+// ---------- composite cards ----------
+function renderComposite(list) {
+  const el = document.getElementById("compositeCards");
+  if (!list.length) { el.innerHTML = '<div class="empty">No composite reading available.</div>'; return; }
+  el.innerHTML = list.map(c => {
+    const color = c.reading === "Supportive" ? "var(--green)" : c.reading === "Weak" ? "var(--rust)" : "var(--amber)";
+    const bg = c.reading === "Supportive" ? "var(--green-bg)" : c.reading === "Weak" ? "var(--rust-bg)" : "var(--amber-bg)";
+    return `<div class="comp-card" style="border-left-color:${color}">
+      <div class="comp-idx">${c.index_id}</div>
+      <div class="comp-reading" style="color:${color};background:${bg}">${c.reading}</div>
+      <div class="comp-pct">${c.composite_percentile.toFixed(0)}<span>th pct</span></div>
+      <div class="comp-rows">
+        <div><span>Net lift (wk)</span><b>${fmtMM(c.net_lift_mm)}</b></div>
+        <div><span>Turnover</span><b>${fmtPct(c.turnover_pct, 2)}</b></div>
+        <div><span>Coupon/supply cov.</span><b>${c.coupon_supply_coverage != null ? c.coupon_supply_coverage.toFixed(2) + "x" : "\u2014"}</b></div>
+      </div>
+      <div class="comp-note">week ending ${c.week_ending} \u00b7 n=${c.sample_weeks} wks sampled</div>
+      <div class="comp-desc">${compositeDescription(c)}</div>
+    </div>`;
+  }).join("");
+}
+
+
+
+
+
+
+
+
+// ---------- weekly net lift chart ----------
+function renderWeeklyLiftChart(weekly) {
+  const wrap = document.getElementById("liftChartContainer");
+  if (!weekly.length) { wrap.innerHTML = '<div class="empty">No weekly data.</div>'; return; }
+  const indices = [...new Set(weekly.map(w => w.index_id))];
+  const weeks = [...new Set(weekly.map(w => w.week_ending))].sort();
+  const byKey = {};
+  weekly.forEach(w => byKey[w.index_id + "|" + w.week_ending] = w.net_lift_mm);
+
+
+
+
+
+
+
+
+  const W = 900, H = 300, M = { top: 16, right: 20, bottom: 34, left: 56 };
+  const plotW = W - M.left - M.right, plotH = H - M.top - M.bottom;
+  const maxAbs = Math.max(1, ...weekly.map(w => Math.abs(w.net_lift_mm))) * 1.2;
+  const yScale = v => M.top + plotH / 2 - (v / maxAbs) * (plotH / 2);
+  const groupW = plotW / weeks.length;
+  const barW = Math.min(28, groupW / (indices.length + 1));
+  const zeroY = yScale(0);
+
+
+
+
+
+
+
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" class="chart-svg" role="img" aria-label="Weekly net dealer lift by index">`;
+  [maxAbs * 0.5, -maxAbs * 0.5].forEach(v => {
+    const y = yScale(v);
+    svg += `<line x1="${M.left}" x2="${W - M.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" class="grid-line"/>`;
+    svg += `<text x="${M.left - 8}" y="${(y + 3).toFixed(1)}" class="axis-label" text-anchor="end">${v.toFixed(0)}</text>`;
+  });
+  svg += `<line x1="${M.left}" x2="${W - M.right}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}" class="grid-line-strong"/>`;
+  svg += `<text x="${M.left - 8}" y="${(zeroY + 3).toFixed(1)}" class="axis-label" text-anchor="end">0</text>`;
+
+
+
+
+
+
+
+
+  weeks.forEach((wk, wi) => {
+    const groupX = M.left + wi * groupW + groupW / 2;
+    indices.forEach((idx, ii) => {
+      const val = byKey[idx + "|" + wk];
+      if (val === undefined) return;
+      const x = groupX - (indices.length * barW) / 2 + ii * barW;
+      const y1 = yScale(val);
+      const top = Math.min(zeroY, y1), h = Math.max(Math.abs(y1 - zeroY), 1);
+      svg += `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${colorFor(idx, ii)}" opacity=".85" class="lift-bar" data-week="${wk}" data-index="${idx}" data-value="${val}"><title>${idx} \u00b7 week ending ${wk} \u00b7 ${fmtMM(val)}</title></rect>`;
+    });
+    svg += `<text x="${groupX.toFixed(1)}" y="${H - M.bottom + 16}" class="axis-label" text-anchor="middle">${wk.slice(5)}</text>`;
+  });
+  svg += "</svg>";
+  wrap.innerHTML = svg;
+
+
+
+
+
+
+
+
+  document.getElementById("liftLegend").innerHTML = indices
+    .map((idx, ii) => `<span class="legend-item"><span class="legend-sw" style="background:${colorFor(idx, ii)}"></span>${idx}</span>`)
+    .join("");
+
+
+
+
+
+
+
+
+  wrap.querySelectorAll(".lift-bar").forEach(rect => {
+    rect.addEventListener("click", () => {
+      const { week, index, value } = rect.dataset;
+      document.getElementById("liftBarReadout").innerHTML =
+        `<span class="hl">${index}</span> \u00b7 week ending <span class="hl">${week}</span> \u00b7 net lift <span class="hl">${fmtMM(Number(value))}</span>`;
+    });
+  });
+}
+
+
+
+
+
+
+
+
+// ---------- turnover trend chart ----------
+function renderTurnoverChart(weekly) {
+  const wrap = document.getElementById("turnoverChartContainer");
+  if (!weekly.length) { wrap.innerHTML = '<div class="empty">No weekly data.</div>'; return; }
+  const indices = [...new Set(weekly.map(w => w.index_id))];
+  const weeks = [...new Set(weekly.map(w => w.week_ending))].sort();
+  const byKey = {};
+  weekly.forEach(w => byKey[w.index_id + "|" + w.week_ending] = w.turnover_pct);
+
+
+
+
+
+
+
+
+  const W = 900, H = 220, M = { top: 16, right: 20, bottom: 30, left: 50 };
+  const plotW = W - M.left - M.right, plotH = H - M.top - M.bottom;
+  const maxV = Math.max(0.1, ...weekly.map(w => w.turnover_pct)) * 1.15;
+  const xScale = i => M.left + (i / (Math.max(weeks.length - 1, 1))) * plotW;
+  const yScale = v => M.top + plotH - (v / maxV) * plotH;
+
+
+
+
+
+
+
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" class="chart-svg" role="img" aria-label="Weekly turnover ratio by index">`;
+  for (let i = 0; i <= 3; i++) {
+    const v = maxV * i / 3, y = yScale(v);
+    svg += `<line x1="${M.left}" x2="${W - M.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" class="grid-line"/>`;
+    svg += `<text x="${M.left - 8}" y="${(y + 3).toFixed(1)}" class="axis-label" text-anchor="end">${v.toFixed(1)}</text>`;
+  }
+  weeks.forEach((wk, i) => svg += `<text x="${xScale(i).toFixed(1)}" y="${H - M.bottom + 16}" class="axis-label" text-anchor="middle">${wk.slice(5)}</text>`);
+
+
+
+
+
+
+
+
+  indices.forEach((idx, ii) => {
+    const color = colorFor(idx, ii);
+    let pts = [];
+    weeks.forEach((wk, i) => {
+      const v = byKey[idx + "|" + wk];
+      if (v !== undefined) pts.push(`${xScale(i).toFixed(1)},${yScale(v).toFixed(1)}`);
+    });
+    if (pts.length) svg += `<polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="2"/>`;
+    weeks.forEach((wk, i) => {
+      const v = byKey[idx + "|" + wk];
+      if (v !== undefined) svg += `<circle cx="${xScale(i).toFixed(1)}" cy="${yScale(v).toFixed(1)}" r="4" fill="${color}" class="turnover-dot" data-week="${wk}" data-index="${idx}" data-value="${v}"><title>${idx} \u00b7 week ending ${wk} \u00b7 ${fmtPct(v, 2)} turnover</title></circle>`;
+    });
+  });
+  svg += "</svg>";
+  wrap.innerHTML = svg;
+
+
+
+
+
+
+
+
+  wrap.querySelectorAll(".turnover-dot").forEach(dot => {
+    dot.addEventListener("click", () => {
+      const { week, index, value } = dot.dataset;
+      document.getElementById("turnoverDotReadout").innerHTML =
+        `<span class="hl">${index}</span> \u00b7 week ending <span class="hl">${week}</span> \u00b7 turnover <span class="hl">${fmtPct(Number(value), 2)}</span>`;
+    });
+  });
+}
+
+
+
+
+
+
+
+
+// ---------- tenor buckets ----------
+function renderTenorBuckets(list) {
+  const el = document.getElementById("tenorContainer");
+  if (!list.length) { el.innerHTML = '<div class="empty">No tenor data.</div>'; return; }
+  const indices = [...new Set(list.map(t => t.index_id))];
+  el.innerHTML = indices.map(idx => {
+    const rows = list.filter(t => t.index_id === idx)
+      .slice().sort((a, b) => TENOR_ORDER.indexOf(a.tenor) - TENOR_ORDER.indexOf(b.tenor));
+    return `<div class="tenor-block">
+      <div class="tenor-idx-label">${idx}</div>
+      ${rows.map(r => `
+        <div class="tenor-row">
+          <div class="tenor-label">${r.tenor}</div>
+          <div class="tenor-bar-track"><div class="tenor-bar-fill" style="width:${r.volume_share_pct.toFixed(1)}%"></div></div>
+          <div class="tenor-share">${r.volume_share_pct.toFixed(1)}%</div>
+          <div class="tenor-lift ${r.net_lift_mm >= 0 ? 'pos' : 'neg'}">${fmtMM(r.net_lift_mm)}</div>
+        </div>`).join("")}
+    </div>`;
+  }).join("");
+}
+
+
+
+
+
+
+
+
+// ---------- rating cohort ----------
+function renderRatingCohort(list) {
+  const section = document.getElementById("ratingSection");
+  const el = document.getElementById("ratingContainer");
+  if (!list.length) { section.style.display = "none"; return; }
+  section.style.display = "";
+  let html = `<table><thead><tr><th>Index</th><th>Rating</th><th class="num">Volume</th><th class="num">Net lift</th></tr></thead><tbody>`;
+  list.forEach(r => {
+    html += `<tr>
+      <td class="mono">${r.index_id}</td>
+      <td class="mono">${r.rating}</td>
+      <td class="num mono">${fmtMM(r.volume_mm)}</td>
+      <td class="num mono" style="color:${r.net_lift_mm >= 0 ? 'var(--green)' : 'var(--rust)'}">${fmtMM(r.net_lift_mm)}</td>
+    </tr>`;
+  });
+  html += "</tbody></table>";
+  el.innerHTML = html;
+}
+
+
+
+
+
+
+
+
+// ---------- coupon vs supply ----------
+function renderCouponSupply(list) {
+  const el = document.getElementById("couponSupplyContainer");
+  if (!list.length) { el.innerHTML = '<div class="empty">No constituent-history snapshots to diff.</div>'; return; }
+  let html = `<table><thead><tr>
+    <th>Index</th><th>As of</th><th class="num">Total par</th><th class="num">Coupon income (ann.)</th><th class="num">Net supply &Delta;</th><th class="num">Coverage</th>
+  </tr></thead><tbody>`;
+  list.forEach(r => {
+    html += `<tr>
+      <td class="mono">${r.index_id}</td>
+      <td class="mono">${r.as_of_date}</td>
+      <td class="num mono">${fmtMM(r.total_amt_out_mm)}</td>
+      <td class="num mono">${fmtMM(r.coupon_income_mm)}</td>
+      <td class="num mono">${r.net_supply_mm != null ? fmtMM(r.net_supply_mm) : "\u2014"}</td>
+      <td class="num mono">${r.coverage_ratio != null ? r.coverage_ratio.toFixed(2) + "x" : "\u2014"}</td>
+    </tr>`;
+  });
+  html += "</tbody></table>";
+  el.innerHTML = html;
+}
+
+
+
+
+
+
+
+
+// ---------- index toggle ----------
+function filterByIndex(list) {
+  return selectedIndex === "ALL" ? list : list.filter(r => r.index_id === selectedIndex);
+}
+function renderIndexToggle(indices) {
+  const el = document.getElementById("idxToggle");
+  if (!indices.length) { el.innerHTML = ""; return; }
+  const options = ["ALL", ...indices];
+  el.innerHTML = options.map(opt =>
+    `<button type="button" data-idx="${opt}" class="${opt === selectedIndex ? "active" : ""}">${opt === "ALL" ? "All" : opt}</button>`
+  ).join("");
+  el.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      selectedIndex = btn.dataset.idx;
+      el.querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.idx === selectedIndex));
+      renderAll();
+    });
+  });
+}
+// ---------- coupon vs supply filters ----------
+// Above-the-table From/To/Coverage controls. Replaces the old hardcoded
+// startsWith("2026") cutoff -- that silently dropped any year that wasn't
+// 2026 with no way to see it. Defaults now span whatever dates are
+// actually in the data, so nothing gets hidden unless the user narrows it.
+function applyCouponSupplyFilters(list) {
+  return list.filter(r => {
+    if (csIndex !== "ALL" && r.index_id !== csIndex) return false;
+    const d = String(r.as_of_date || "");
+    if (csFrom && d < csFrom) return false;
+    if (csTo && d > csTo) return false;
+    if (csCoverage === "COVERED" && !(r.coverage_ratio != null && r.coverage_ratio >= 1)) return false;
+    if (csCoverage === "UNCOVERED" && !(r.coverage_ratio != null && r.coverage_ratio < 1)) return false;
+    return true;
+  });
+}
+function renderCouponSupplySection() {
+  // Index here is a local control (csIndex), independent of the page-wide
+  // idx-toggle -- lets this table show a different index than the rest of
+  // the page if that's useful, so it does NOT go through filterByIndex().
+  renderCouponSupply(applyCouponSupplyFilters(DATA.coupon_vs_supply || []));
+}
+function initCsFilters() {
+  const indices = (DATA.meta && DATA.meta.indices) || [];
+  const idxEl = document.getElementById("csIndex");
+  idxEl.innerHTML = ['<option value="ALL">All</option>', ...indices.map(i => `<option value="${i}">${i}</option>`)].join("");
+  idxEl.value = csIndex;
+  idxEl.addEventListener("change", () => { csIndex = idxEl.value; renderCouponSupplySection(); });
+  const dates = (DATA.coupon_vs_supply || []).map(r => String(r.as_of_date || "")).filter(Boolean).sort();
+  const fromEl = document.getElementById("csFrom"), toEl = document.getElementById("csTo"), covEl = document.getElementById("csCoverage");
+  if (dates.length) {
+    fromEl.min = toEl.min = dates[0];
+    fromEl.max = toEl.max = dates[dates.length - 1];
+    fromEl.value = dates[0];
+    toEl.value = dates[dates.length - 1];
+    csFrom = dates[0];
+    csTo = dates[dates.length - 1];
+  }
+  fromEl.addEventListener("change", () => { csFrom = fromEl.value || null; renderCouponSupplySection(); });
+  toEl.addEventListener("change", () => { csTo = toEl.value || null; renderCouponSupplySection(); });
+  covEl.addEventListener("change", () => { csCoverage = covEl.value; renderCouponSupplySection(); });
+  document.getElementById("csReset").addEventListener("click", () => {
+    fromEl.value = dates[0] || "";
+    toEl.value = dates[dates.length - 1] || "";
+    covEl.value = "ALL";
+    idxEl.value = "ALL";
+    csFrom = dates[0] || null;
+    csTo = dates[dates.length - 1] || null;
+    csCoverage = "ALL";
+    csIndex = "ALL";
+    renderCouponSupplySection();
+  });
+}
+function renderAll() {
+  document.getElementById("liftBarReadout").innerHTML = "Click a bar to see its week.";
+  document.getElementById("turnoverDotReadout").innerHTML = "Click a point to see its week.";
+  renderComposite(filterByIndex(DATA.composite || []));
+  renderWeeklyLiftChart(filterByIndex(DATA.weekly || []));
+  renderTurnoverChart(filterByIndex(DATA.weekly || []));
+  renderTenorBuckets(filterByIndex(DATA.tenor_buckets || []));
+  renderRatingCohort(filterByIndex(DATA.rating_cohort || []));
+  renderCouponSupplySection();
+}
+
+
+
+
+
+
+
+
+// ---------- init ----------
+async function init() {
+  try {
+    DATA = await fetchJson(DATA_URL);
+    const m = DATA.meta || {};
+
+
+
+
+
+
+
+
+    document.getElementById("freshnessBadge").textContent = freshnessBadgeHtml(m.generated_at);
+    document.getElementById("overviewLine").textContent =
+      `${(m.indices || []).join(", ") || "\u2014"} \u00b7 TRACE ${m.trace_date_range ? m.trace_date_range.join(" to ") : "\u2014"} \u00b7 ` +
+      `${m.trace_rows_matched ?? "?"} customer trades matched (${m.match_rate_pct ?? "?"}%) \u00b7 week convention: ${m.week_ending_convention || "\u2014"}`;
+    document.getElementById("meta").textContent =
+      `Generated ${m.generated_at || "\u2014"} \u00b7 ${m.methodology_note || ""}`;
+
+
+
+
+
+
+
+
+    renderIndexToggle(m.indices || []);
+    initCsFilters();
+    renderAll();
+  } catch (err) {
+    document.getElementById("compositeCards").innerHTML =
+      `<div class="fetch-error">Could not load <code>${DATA_URL}</code> (${err.message}). ` +
+      `Make sure <code>demand_technical.json</code> from demand_technical_engine.py is uploaded to this same Neocities folder.</div>`;
+    document.getElementById("freshnessBadge").textContent = "No data loaded";
+  }
+}
+
+
+
+
+
+
+
+
+init();
+</script>
+</body>
+</html>
